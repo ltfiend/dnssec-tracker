@@ -1,0 +1,37 @@
+{% extends "layout.html" %}
+{% block title %}Events — dnssec-tracker{% endblock %}
+
+{% block content %}
+<h2>Events</h2>
+<form method="get" class="filters">
+  <label>Zone <input name="zone" value="{{ zone or '' }}"></label>
+  <label>Type <input name="event_type" value="{{ event_type or '' }}"></label>
+  <label>Source <input name="source" value="{{ source or '' }}"></label>
+  <label>From <input name="from" value="{{ from_ts or '' }}" placeholder="YYYY-MM-DDTHH:MM:SSZ"></label>
+  <label>To <input name="to" value="{{ to_ts or '' }}" placeholder="YYYY-MM-DDTHH:MM:SSZ"></label>
+  <button type="submit">Filter</button>
+</form>
+
+{% if events %}
+<table class="events">
+  <thead>
+    <tr><th>When</th><th>Source</th><th>Zone</th><th>Key</th><th>Type</th><th>Summary</th></tr>
+  </thead>
+  <tbody>
+    {% for e in events %}
+    <tr class="src-{{ e.source }}">
+      <td class="ts">{{ e.ts }}</td>
+      <td><span class="badge">{{ e.source }}</span></td>
+      <td>{{ e.zone or '' }}</td>
+      <td>{% if e.key_tag %}{{ e.key_role or '' }} {{ e.key_tag }}{% endif %}</td>
+      <td>{{ e.event_type }}</td>
+      <td>{{ e.summary }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p>Page {{ page }} · <a href="?page={{ page + 1 }}{% if zone %}&zone={{ zone }}{% endif %}">next &rarr;</a></p>
+{% else %}
+<p><em>No events match.</em></p>
+{% endif %}
+{% endblock %}

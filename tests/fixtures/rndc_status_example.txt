@@ -1,0 +1,26 @@
+dnssec-policy: default
+current time:  Fri Apr 10 08:27:10 2026
+
+key: 12345 (ECDSAP256SHA256), KSK
+  published:      yes - since Wed Apr  1 00:00:00 2026
+  key signing:    yes - since Wed Apr  1 00:00:00 2026
+
+  No rollover scheduled
+
+  - goal:           omnipresent
+  - dnskey:         omnipresent
+  - ds:             rumoured
+  - zone rrsig:     N/A
+  - key rrsig:      omnipresent
+
+key: 67890 (ECDSAP256SHA256), ZSK
+  published:      yes - since Wed Apr  1 00:00:00 2026
+  zone signing:   yes - since Thu Apr  2 00:00:00 2026
+
+  Next rollover: Sun May  3 00:00:00 2026
+
+  - goal:           omnipresent
+  - dnskey:         omnipresent
+  - ds:             N/A
+  - zone rrsig:     omnipresent
+  - key rrsig:      N/A

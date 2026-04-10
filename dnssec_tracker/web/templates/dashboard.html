@@ -1,0 +1,51 @@
+{% extends "layout.html" %}
+{% block title %}Dashboard — dnssec-tracker{% endblock %}
+
+{% block content %}
+<h2>Zones</h2>
+{% if zones %}
+<table class="zones">
+  <thead>
+    <tr><th>Zone</th><th>Key directory</th><th>First seen</th><th>Last seen</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for z in zones %}
+    <tr>
+      <td><a href="/zones/{{ z.name }}">{{ z.name }}</a></td>
+      <td><code>{{ z.key_dir }}</code></td>
+      <td class="ts">{{ z.first_seen }}</td>
+      <td class="ts">{{ z.last_seen }}</td>
+      <td><a class="action" href="/zones/{{ z.name }}/report.html">HTML</a>
+          <a class="action" href="/zones/{{ z.name }}/report.pdf">PDF</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p><em>No zones discovered yet. Tracker scans the key directory every 30
+seconds — zones will appear once BIND writes a K*.key or K*.state file.</em></p>
+{% endif %}
+
+<h2>Recent events</h2>
+{% if recent %}
+<table class="events">
+  <thead>
+    <tr><th>When</th><th>Source</th><th>Zone</th><th>Type</th><th>Summary</th></tr>
+  </thead>
+  <tbody>
+    {% for e in recent %}
+    <tr class="src-{{ e.source }}">
+      <td class="ts">{{ e.ts }}</td>
+      <td><span class="badge">{{ e.source }}</span></td>
+      <td>{{ e.zone or '' }}</td>
+      <td>{{ e.event_type }}</td>
+      <td>{{ e.summary }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p><a href="/events">All events &rarr;</a></p>
+{% else %}
+<p><em>No events yet.</em></p>
+{% endif %}
+{% endblock %}

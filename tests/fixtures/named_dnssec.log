@@ -1,0 +1,4 @@
+10-Apr-2026 08:27:10.123 dnssec: info: zone example.com/IN: next key event in 3600 seconds
+10-Apr-2026 08:27:12.456 dnssec: info: zone example.com/IN: DNSKEY ECDSAP256SHA256/13/12345 (KSK) is now published
+10-Apr-2026 08:27:13.789 dnssec: info: zone example.com/IN: DNSKEY ECDSAP256SHA256/13/67890 (ZSK) is now active
+10-Apr-2026 08:27:14.000 general: info: received control channel command 'dnssec -status example.com'

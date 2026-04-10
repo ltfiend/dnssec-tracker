@@ -1,0 +1,39 @@
+# Example compose file for dnssec-tracker.
+#
+# Adjust the source paths on the left of each bind mount to match the
+# host running your BIND instance. Tracker is a passive observer — it
+# opens the key directory, syslog, BIND's own log, and the rndc control
+# socket read-only, and queries DNS outward. It never writes to BIND.
+#
+# NOTE on rndc: the rndc_status collector calls `rndc dnssec -status
+# <zone>` to capture BIND's own view of each key (hidden / rumoured /
+# omnipresent / unretentive). For that to work:
+#   * mount the rndc key file read-only
+#   * set `controls { inet 127.0.0.1 port 953 allow { ... }; };` in
+#     named.conf so the container can reach it (or expose via the host
+#     network, as shown below)
+
+services:
+  dnssec-tracker:
+    build: .
+    image: dnssec-tracker:latest
+    container_name: dnssec-tracker
+    network_mode: host     # simplest way to reach rndc + DNS on the host
+    user: "5000:5000"
+    volumes:
+      # BIND key directory
+      - /etc/bind/keys:/mnt/bind/keys:ro
+      # host syslog
+      - /var/log/syslog:/mnt/host/var/log/syslog:ro
+      # BIND's own log file
+      - /var/log/named/named.log:/mnt/bind/log/named.log:ro
+      # rndc key so the rndc_status collector can authenticate
+      - /etc/bind/rndc.key:/mnt/bind/rndc.key:ro
+      # persistent event database
+      - tracker-data:/var/lib/dnssec-tracker
+      # config
+      - ./config/dnssec-tracker.conf.example:/etc/dnssec-tracker/dnssec-tracker.conf:ro
+    restart: unless-stopped
+
+volumes:
+  tracker-data:

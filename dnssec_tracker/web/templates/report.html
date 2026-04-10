@@ -1,0 +1,138 @@
+{#
+  Report template — shared by the standalone HTML export and the PDF
+  export. The rendering code inlines CSS and SVG so the same template
+  works for WeasyPrint (no JS) and as a self-contained HTML file.
+#}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ zone.name }} DNSSEC report</title>
+  <style>{{ css|safe }}</style>
+</head>
+<body class="report">
+  <section class="cover">
+    <h1>DNSSEC lifecycle report</h1>
+    <h2>{{ zone.name }}</h2>
+    <dl>
+      <dt>Time window</dt>
+      <dd>{{ window_start or 'earliest' }} &rarr; {{ window_end or 'now' }}</dd>
+      <dt>Generated</dt>
+      <dd>{{ generated_at }}</dd>
+      <dt>Key directory</dt>
+      <dd><code>{{ zone.key_dir }}</code></dd>
+      {% if policy_snapshot %}
+      <dt>dnssec-policy</dt>
+      <dd><code>{{ policy_snapshot }}</code></dd>
+      {% endif %}
+    </dl>
+  </section>
+
+  <section class="summary">
+    <h2>Summary</h2>
+    <p>{{ executive_summary }}</p>
+    <ul>
+      <li>Keys observed: {{ keys|length }}</li>
+      <li>Events recorded: {{ events|length }}</li>
+      <li>State changes (state_file): {{ counts.state_changed }}</li>
+      <li>State changes (rndc dnssec -status): {{ counts.rndc_state_changed }}</li>
+      <li>DNS observations (zone + parent): {{ counts.dns_events }}</li>
+      <li>iodyn-dnssec actions: {{ counts.iodyn_events }}</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Key inventory</h2>
+    <table class="keys">
+      <thead>
+        <tr><th>Tag</th><th>Role</th><th>Algorithm</th><th>Key id</th><th>First seen</th></tr>
+      </thead>
+      <tbody>
+        {% for k in keys %}
+        <tr>
+          <td>{{ k.key_tag }}</td>
+          <td>{{ k.role }}</td>
+          <td>{{ k.algorithm }}</td>
+          <td><code>{{ k.key_id }}</code></td>
+          <td>{{ k.first_seen }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>State machine timeline</h2>
+    <p class="note">
+      Colour bars show each key's state-machine value over the window.
+      Separate lanes for <code>GoalState</code>, <code>DNSKEYState</code>,
+      <code>KRRSIGState</code>, <code>ZRRSIGState</code>, and
+      <code>DSState</code>. The rndc view is drawn below from
+      <code>rndc dnssec -status</code>; discrepancies between the two
+      are where bugs and BIND quirks usually live.
+    </p>
+    <div class="timeline">{{ timeline_svg|safe }}</div>
+    {% if rndc_svg %}
+    <h3>BIND's view (rndc dnssec -status)</h3>
+    <div class="timeline">{{ rndc_svg|safe }}</div>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Chronological event log</h2>
+    {% for day, day_events in events_by_day %}
+    <h3>{{ day }}</h3>
+    <table class="events">
+      <thead>
+        <tr><th>Time</th><th>Source</th><th>Key</th><th>Type</th><th>Summary</th></tr>
+      </thead>
+      <tbody>
+        {% for e in day_events %}
+        <tr class="src-{{ e.source }}">
+          <td>{{ e.ts.split('T', 1)[1] if 'T' in e.ts else e.ts }}</td>
+          <td><span class="badge">{{ e.source }}</span></td>
+          <td>{% if e.key_tag %}{{ e.key_role or '' }} {{ e.key_tag }}{% endif %}</td>
+          <td>{{ e.event_type }}</td>
+          <td>{{ e.summary }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endfor %}
+  </section>
+
+  {% if dns_observations %}
+  <section>
+    <h2>DNS observations</h2>
+    <p class="note">Samples of what was visible at the zone and at the parent.</p>
+    <table class="dns">
+      <thead>
+        <tr><th>When</th><th>Where</th><th>Type</th><th>Change</th></tr>
+      </thead>
+      <tbody>
+        {% for d in dns_observations %}
+        <tr>
+          <td>{{ d.ts }}</td>
+          <td>{{ 'parent' if d.detail.get('parent') else 'zone' }}</td>
+          <td>{{ d.detail.get('rrtype','') }}</td>
+          <td>{{ d.summary }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  <section>
+    <h2>Appendix — raw state snapshots</h2>
+    {% if state_snapshots %}
+    {% for tag, snap in state_snapshots.items() %}
+    <h3>{{ tag }}</h3>
+    <pre>{{ snap }}</pre>
+    {% endfor %}
+    {% else %}
+    <p><em>No state snapshots were captured in this window.</em></p>
+    {% endif %}
+  </section>
+</body>
+</html>

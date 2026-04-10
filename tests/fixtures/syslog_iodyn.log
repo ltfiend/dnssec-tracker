@@ -1,0 +1,6 @@
+Apr 10 08:27:10 dns01 iodyn-dnssec[1234]: Key.create:Creating example.com. KSK key using ECDSAP256SHA256
+Apr 10 08:27:10 dns01 iodyn-dnssec[1234]: Key.create cmd: /usr/bin/dnssec-keygen -a ECDSAP256SHA256 -b 256 -n ZONE -f KSK example.com.
+Apr 10 08:27:11 dns01 iodyn-dnssec[1234]: settime:modifying example.com. KSKkey setting Publish to 1712724430
+Apr 10 08:27:11 dns01 iodyn-dnssec[1234]: settime cmd: /usr/bin/dnssec-settime -P 1712724430 Kexample.com.+013+12345
+Apr 10 08:27:12 dns01 iodyn-dnssec[1234]: ds:list ds for example.com.
+Apr 10 08:27:12 dns01 iodyn-dnssec[1234]: bind_reload:RNDC reload

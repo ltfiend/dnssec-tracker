@@ -1,0 +1,36 @@
+{% extends "layout.html" %}
+{% block title %}{{ zone }} key {{ keys[0].key_tag }} — dnssec-tracker{% endblock %}
+
+{% block content %}
+<h2>{{ zone }} — key {{ keys[0].key_tag }}</h2>
+{% for k in keys %}
+<p class="meta">
+  Role: <strong>{{ k.role }}</strong><br>
+  Algorithm: {{ k.algorithm }}<br>
+  Key id: <code>{{ k.key_id }}</code><br>
+  First seen: <span class="ts">{{ k.first_seen }}</span>
+</p>
+{% endfor %}
+<p><a href="/zones/{{ zone }}">&larr; back to zone</a></p>
+
+<h3>Events for this key</h3>
+{% if events %}
+<table class="events">
+  <thead>
+    <tr><th>When</th><th>Source</th><th>Type</th><th>Summary</th></tr>
+  </thead>
+  <tbody>
+    {% for e in events %}
+    <tr class="src-{{ e.source }}">
+      <td class="ts">{{ e.ts }}</td>
+      <td><span class="badge">{{ e.source }}</span></td>
+      <td>{{ e.event_type }}</td>
+      <td>{{ e.summary }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p><em>No events recorded for this key yet.</em></p>
+{% endif %}
+{% endblock %}

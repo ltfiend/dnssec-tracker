@@ -1,0 +1,16 @@
+; This is the state of key 67890, for example.com.
+Algorithm: 13
+Length: 256
+Lifetime: 2592000
+KSK: no
+ZSK: yes
+Generated: 20260401000000
+Published: 20260401000000
+Active: 20260402000000
+Retired: 0
+Removed: 0
+DNSKEYChange: 20260401000000
+ZRRSIGChange: 20260402000000
+GoalState: omnipresent
+DNSKEYState: omnipresent
+ZRRSIGState: omnipresent

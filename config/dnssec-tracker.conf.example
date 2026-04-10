@@ -1,0 +1,65 @@
+; dnssec-tracker configuration
+;
+; Style mirrors iodyn-dnssec.conf so the two tools feel familiar side by side.
+
+[paths]
+; Root of BIND's key-directory tree. Tracker walks this looking for K*.key
+; and K*.state files. Zones are auto-discovered — any subdirectory or
+; flat layout is fine.
+key_dir      = /mnt/bind/keys
+
+; Host syslog file (mount read-only). The syslog collector tails it for
+; lines from iodyn-dnssec and named.
+syslog       = /mnt/host/var/log/syslog
+
+; BIND's configured log file (optional). Leave empty to disable the
+; named_log collector.
+named_log    = /mnt/bind/log/named.log
+
+; SQLite database path. The parent directory must be writable by the
+; `tracker` user inside the container.
+db           = /var/lib/dnssec-tracker/events.db
+
+[dns]
+; Resolver used when querying the zone directly. Usually the BIND you
+; are observing.
+local_resolver  = 127.0.0.1:53
+
+; How often (seconds) to query the zone for DNSKEY/RRSIG/CDS/CDNSKEY/SOA.
+query_interval  = 60
+
+; How often (seconds) to query the parent zone for DS.
+parent_interval = 300
+
+; Optional timeout (seconds) for each DNS query.
+query_timeout   = 5
+
+[collectors]
+; Toggle each collector. "on" or "off".
+state_file  = on
+key_file    = on
+syslog      = on
+named_log   = on
+dns_probe   = on
+; rndc_status captures BIND's own view of each key's state
+; (goal / dnskey / ds / zone rrsig / key rrsig = hidden | rumoured |
+; omnipresent | unretentive) via `rndc dnssec -status <zone>`. This is
+; the cleanest window into what BIND actually thinks is happening and
+; is on by default.
+rndc_status = on
+
+[rndc]
+; Used by the rndc_status collector. Runs `rndc dnssec -status <zone>`
+; every `interval` seconds for each discovered zone.
+key_file = /mnt/bind/rndc.key
+server   = 127.0.0.1:953
+rndc_bin = /usr/sbin/rndc
+interval = 300
+
+[web]
+; FastAPI bind address. In production bind to localhost and expose via
+; SSH tunnel or a reverse proxy — the UI has no authentication.
+bind = 0.0.0.0:8080
+
+; Page size for the event log.
+events_per_page = 100

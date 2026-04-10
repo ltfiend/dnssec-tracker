@@ -1,0 +1,64 @@
+{% extends "layout.html" %}
+{% block title %}{{ zone.name }} — dnssec-tracker{% endblock %}
+
+{% block content %}
+<h2>{{ zone.name }}</h2>
+<p class="meta">
+  Key directory: <code>{{ zone.key_dir }}</code><br>
+  Tracked since {{ zone.first_seen }}, last observation {{ zone.last_seen }}
+</p>
+
+<p>
+  <a class="action" href="/zones/{{ zone.name }}/report.html">Export HTML report</a>
+  <a class="action" href="/zones/{{ zone.name }}/report.pdf">Export PDF report</a>
+</p>
+
+<h3>Keys</h3>
+{% if keys %}
+<table class="keys">
+  <thead>
+    <tr><th>Tag</th><th>Role</th><th>Algorithm</th><th>Key id</th><th>First seen</th></tr>
+  </thead>
+  <tbody>
+    {% for k in keys %}
+    <tr>
+      <td><a href="/zones/{{ zone.name }}/keys/{{ k.key_tag }}">{{ k.key_tag }}</a></td>
+      <td>{{ k.role }}</td>
+      <td>{{ k.algorithm }}</td>
+      <td><code>{{ k.key_id }}</code></td>
+      <td class="ts">{{ k.first_seen }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p><em>No keys observed yet for this zone.</em></p>
+{% endif %}
+
+{% if timeline_svg %}
+<h3>State timeline</h3>
+<div class="timeline">{{ timeline_svg|safe }}</div>
+{% endif %}
+
+<h3>Event log</h3>
+{% if events %}
+<table class="events">
+  <thead>
+    <tr><th>When</th><th>Source</th><th>Key</th><th>Type</th><th>Summary</th></tr>
+  </thead>
+  <tbody>
+    {% for e in events %}
+    <tr class="src-{{ e.source }}">
+      <td class="ts">{{ e.ts }}</td>
+      <td><span class="badge">{{ e.source }}</span></td>
+      <td>{% if e.key_tag %}{{ e.key_role or '' }} {{ e.key_tag }}{% endif %}</td>
+      <td>{{ e.event_type }}</td>
+      <td>{{ e.summary }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p><em>No events recorded for this zone yet.</em></p>
+{% endif %}
+{% endblock %}

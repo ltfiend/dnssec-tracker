@@ -1,0 +1,18 @@
+; This is the state of key 12345, for example.com.
+Algorithm: 13
+Length: 256
+Lifetime: 5184000
+KSK: yes
+ZSK: no
+Generated: 20260401000000
+Published: 20260401000000
+Active: 20260407000000
+Retired: 0
+Removed: 0
+DNSKEYChange: 20260401000000
+KRRSIGChange: 20260407000000
+DSChange: 20260410000000
+GoalState: omnipresent
+DNSKEYState: omnipresent
+KRRSIGState: omnipresent
+DSState: rumoured

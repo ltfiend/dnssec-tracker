@@ -1,0 +1,68 @@
+:root {
+  --fg: #1b1d22;
+  --bg: #f7f7f9;
+  --border: #dcdde3;
+  --muted: #6a707b;
+  --accent: #1f5fb0;
+  --state: #3e885b;
+  --key: #9a6b1a;
+  --syslog: #7a3a9f;
+  --dns: #0d6c8a;
+  --named: #b03b00;
+  --rndc: #a62e4f;
+}
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+}
+header {
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+  padding: 0.8rem 1.4rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+header h1 { margin: 0; font-size: 1.2rem; }
+header h1 a { text-decoration: none; color: var(--fg); }
+header nav a { margin-left: 1rem; color: var(--accent); text-decoration: none; }
+
+main { padding: 1.2rem 1.4rem 3rem; max-width: 1200px; margin: 0 auto; }
+
+h2 { margin-top: 1.6rem; }
+code { background: #eef0f4; padding: 0.05rem 0.3rem; border-radius: 3px; }
+
+table { border-collapse: collapse; width: 100%; background: #fff; }
+table th, table td { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); text-align: left; font-size: 0.88rem; vertical-align: top; }
+table th { background: #eef0f4; font-weight: 600; }
+.ts { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 0.82rem; color: var(--muted); white-space: nowrap; }
+
+.badge { display: inline-block; font-size: 0.72rem; padding: 0.1rem 0.4rem; border-radius: 3px; background: #eef0f4; color: var(--muted); }
+.src-state .badge { background: #e1efe6; color: var(--state); }
+.src-key .badge { background: #f3ead8; color: var(--key); }
+.src-syslog .badge { background: #ece1f2; color: var(--syslog); }
+.src-dns .badge { background: #daecf1; color: var(--dns); }
+.src-named .badge { background: #f5dfd1; color: var(--named); }
+.src-rndc .badge { background: #f3dee5; color: var(--rndc); }
+
+.action { display: inline-block; margin-right: 0.6rem; color: var(--accent); text-decoration: none; border: 1px solid var(--accent); padding: 0.15rem 0.5rem; border-radius: 3px; font-size: 0.82rem; }
+.action:hover { background: var(--accent); color: #fff; }
+
+.filters { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem; }
+.filters label { font-size: 0.82rem; color: var(--muted); display: flex; flex-direction: column; }
+.filters input { padding: 0.2rem 0.4rem; border: 1px solid var(--border); border-radius: 3px; }
+.filters button { align-self: end; padding: 0.3rem 0.8rem; background: var(--accent); color: #fff; border: 0; border-radius: 3px; cursor: pointer; }
+
+.meta { color: var(--muted); font-size: 0.9rem; }
+.timeline { overflow-x: auto; background: #fff; border: 1px solid var(--border); padding: 0.6rem; }
+
+/* report-specific styling — inlined for HTML/PDF exports */
+.report { max-width: none; padding: 2.5rem 2.5rem 3rem; background: #fff; }
+.report .cover { page-break-after: always; }
+.report .cover h1 { font-size: 2rem; margin-bottom: 0.2rem; }
+.report .cover h2 { font-size: 1.3rem; font-weight: 500; color: var(--muted); margin-top: 0; }
+.report section { page-break-inside: avoid; margin-top: 2rem; }
+.report .note { color: var(--muted); font-size: 0.88rem; }
+.report pre { background: #f4f4f7; padding: 0.7rem; border: 1px solid var(--border); border-radius: 3px; overflow-x: auto; font-size: 0.78rem; }
