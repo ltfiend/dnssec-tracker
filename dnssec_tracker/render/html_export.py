@@ -17,6 +17,7 @@ from ..models import Event, now_iso
 from .calendar import render_calendar
 from .channels import dns_channel, file_channel
 from .event_timeline import render_event_timeline
+from .filtering import FilterSet, filter_events
 from .templating import create_env
 from .timeline_svg import render_rndc_timeline, render_state_timeline
 
@@ -43,6 +44,7 @@ def _build_report_context(
     zone: str,
     from_ts: str | None,
     to_ts: str | None,
+    filterset: FilterSet | None = None,
 ) -> dict:
     z = db.get_zone(zone)
     if z is None:
@@ -56,6 +58,10 @@ def _build_report_context(
             )
         )
     )
+    # Apply the FilterSet *before* computing any counts, calendars,
+    # timelines, or per-key blocks so every downstream section of the
+    # report reflects the same filtered view.
+    events = filter_events(events, filterset)
 
     counts = {
         "state_changed": sum(1 for e in events if e.event_type == "state_changed"),
@@ -79,8 +85,10 @@ def _build_report_context(
     # K*.state) pulled live from the collector snapshots so the report
     # captures the exact values at render time. Events for each key
     # are also grouped so the report can show the per-key timeline
-    # alongside the zone-wide one.
-    per_key_blocks = _build_per_key_blocks(db, keys, events)
+    # alongside the zone-wide one. The FilterSet is applied inside
+    # _build_per_key_blocks as well so each key's section reflects
+    # the same filter the zone-level sections do.
+    per_key_blocks = _build_per_key_blocks(db, keys, events, filterset)
 
     dns_observations = [e for e in events if e.source == "dns"]
 
@@ -127,6 +135,7 @@ def _build_report_context(
         "policy_snapshot": "",  # filled in later if we can read named.conf
         "executive_summary": executive_summary,
         "css": _load_css(),
+        "filterset": filterset,
     }
 
 
@@ -134,9 +143,18 @@ def _build_per_key_blocks(
     db: Database,
     keys,
     events: list[Event],
+    filterset: FilterSet | None = None,
 ) -> list[dict]:
     """For each key, gather its current timing snapshots and the
     events filtered down to that key (matched by ``key_tag``).
+
+    If a ``filterset`` is supplied it's applied on top of the key_tag
+    match so every per-key block reflects the same filter as the
+    zone-wide sections above it. Note: when the report-wide events
+    list is already filtered (as it is in the normal call path from
+    :func:`_build_report_context`) re-applying the FilterSet here is
+    a cheap no-op, but it stays cheap and means direct callers of
+    ``_build_per_key_blocks`` don't need to remember to pre-filter.
     """
 
     blocks: list[dict] = []
@@ -158,7 +176,9 @@ def _build_per_key_blocks(
             k_: state_fields_all.get(k_) for k_ in TIMESTAMP_FIELDS if k_ in state_fields_all
         }
 
-        key_events = [e for e in events if e.key_tag == k.key_tag]
+        key_events = filter_events(
+            [e for e in events if e.key_tag == k.key_tag], filterset
+        )
         # Only timing-change events (for the "changes observed"
         # subsection in the template).
         timing_changes = [
@@ -188,8 +208,12 @@ def render_report_html(
     zone: str,
     from_ts: str | None = None,
     to_ts: str | None = None,
+    *,
+    filterset: FilterSet | None = None,
 ) -> str:
-    ctx = _build_report_context(db, config, zone, from_ts, to_ts)
+    ctx = _build_report_context(
+        db, config, zone, from_ts, to_ts, filterset=filterset
+    )
     env = create_env()
     tmpl = env.get_template("report.html")
     return tmpl.render(**ctx)

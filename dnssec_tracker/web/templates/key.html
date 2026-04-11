@@ -5,6 +5,39 @@
 <h2>{{ zone }} — key {{ tag }}</h2>
 <p><a href="/zones/{{ zone }}">&larr; back to zone</a></p>
 
+<form method="get" class="filters">
+  <label>
+    Role
+    <select name="role">
+      <option value="all"{% if role == 'all' %} selected{% endif %}>all</option>
+      <option value="KSK"{% if role == 'KSK' %} selected{% endif %}>KSK</option>
+      <option value="ZSK"{% if role == 'ZSK' %} selected{% endif %}>ZSK</option>
+      <option value="CSK"{% if role == 'CSK' %} selected{% endif %}>CSK</option>
+    </select>
+  </label>
+  <label class="preset-check">
+    <input type="checkbox" name="hide_types_preset" value="rrsig,soa"{% if hide_types == 'rrsig,soa' %} checked{% endif %}>
+    DNSKEY focus
+  </label>
+  <label>
+    Hide types
+    <input type="text" name="hide_types" value="{{ hide_types or '' }}" placeholder="rrsig,soa or any regex">
+    <span class="hint">regex</span>
+  </label>
+  <label>
+    Hide sources
+    <input type="text" name="hide_sources" value="{{ hide_sources or '' }}" placeholder="dns,rndc,state,key,syslog,named">
+  </label>
+  <button type="submit">Apply</button>
+  <a class="clear" href="/zones/{{ zone }}/keys/{{ tag }}">Clear</a>
+</form>
+<p class="meta filter-note">
+  For KSKs the DS lifecycle at the parent stays visible under
+  <code>role=KSK</code>; switching to <code>role=ZSK</code> additionally
+  drops <code>dns_ds_*</code>, <code>dns_cds_*</code>, and
+  <code>dns_cdnskey_*</code> events since ZSKs have no parent presence.
+</p>
+
 {% for block in key_blocks %}
 {% set k = block.key %}
 <section class="key-block">

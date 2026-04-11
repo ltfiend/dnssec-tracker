@@ -16,6 +16,7 @@ from ..parsers.bind_state import STATE_FIELDS, TIMESTAMP_FIELDS
 from ..render.calendar import render_calendar
 from ..render.channels import dns_channel, file_channel
 from ..render.event_timeline import render_event_timeline
+from ..render.filtering import FilterSet, filter_events
 from ..render.html_export import render_report_html
 from ..render.pdf_export import render_report_pdf
 from ..render.templating import create_env
@@ -59,12 +60,25 @@ def build_router(db: Database, config: Config) -> APIRouter:
         return render("dashboard.html", zones=zones, recent=recent)
 
     @router.get("/zones/{zone}", response_class=HTMLResponse)
-    def zone_detail(zone: str) -> HTMLResponse:
+    def zone_detail(
+        zone: str,
+        hide_types: str | None = None,
+        hide_types_preset: str | None = None,
+        hide_sources: str | None = None,
+        role: str | None = None,
+    ) -> HTMLResponse:
         z = db.get_zone(zone)
         if z is None:
             raise HTTPException(404, f"zone {zone} not found")
         keys = db.list_keys(zone)
-        events = db.query_events(zone=zone, limit=config.events_per_page)
+        # The DNSKEY-focus checkbox and the free-form text box share
+        # the same logical dimension. If the preset is ticked, it
+        # wins; otherwise fall back to whatever the user typed.
+        hide_types = hide_types_preset or hide_types
+        fs = FilterSet.from_query(hide_types, hide_sources, role)
+        events = filter_events(
+            db.query_events(zone=zone, limit=config.events_per_page), fs
+        )
         timeline_svg = render_state_timeline(events, keys)
         # Split the chronological event chart into two channels:
         # DNS (dns_probe + rndc_status) and File (state_file + key_file).
@@ -80,13 +94,26 @@ def build_router(db: Database, config: Config) -> APIRouter:
             calendar_html=calendar_html,
             dns_timeline_svg=dns_timeline_svg,
             file_timeline_svg=file_timeline_svg,
+            filterset=fs,
+            hide_types=hide_types or "",
+            hide_sources=hide_sources or "",
+            role=fs.role,
         )
 
     @router.get("/zones/{zone}/keys/{tag}", response_class=HTMLResponse)
-    def key_detail(zone: str, tag: int) -> HTMLResponse:
+    def key_detail(
+        zone: str,
+        tag: int,
+        hide_types: str | None = None,
+        hide_types_preset: str | None = None,
+        hide_sources: str | None = None,
+        role: str | None = None,
+    ) -> HTMLResponse:
         keys = [k for k in db.list_keys(zone) if k.key_tag == tag]
         if not keys:
             raise HTTPException(404, f"key {tag} not found in {zone}")
+        # Preset checkbox wins over the text box if both are sent.
+        hide_types = hide_types_preset or hide_types
 
         # Pull live timing snapshots for every (role) instance of this
         # tag. Each collector stores them keyed by
@@ -113,11 +140,16 @@ def build_router(db: Database, config: Config) -> APIRouter:
         # Events for this key. DS events land in here naturally because
         # _extract_key_tag pulls the tag from DS rdata at emit time,
         # so KSKs see the "DS (key tag N) appeared at parent" story
-        # without any special plumbing.
+        # without any special plumbing. The key_tag match happens
+        # *before* the FilterSet so role=KSK (default for a KSK page)
+        # still keeps the DS events, which are emitted with
+        # key_role=None.
         events = [
             e for e in db.query_events(zone=zone, limit=2000)
             if e.key_tag == tag
         ]
+        fs = FilterSet.from_query(hide_types, hide_sources, role)
+        events = filter_events(events, fs)
         timing_change_events = [
             e for e in events
             if e.event_type in ("key_timing_changed", "state_timing_changed")
@@ -137,6 +169,10 @@ def build_router(db: Database, config: Config) -> APIRouter:
             calendar_html=calendar_html,
             dns_timeline_svg=dns_timeline_svg,
             file_timeline_svg=file_timeline_svg,
+            filterset=fs,
+            hide_types=hide_types or "",
+            hide_sources=hide_sources or "",
+            role=fs.role,
         )
 
     @router.get("/events", response_class=HTMLResponse)
@@ -253,8 +289,12 @@ def build_router(db: Database, config: Config) -> APIRouter:
         zone: str,
         from_ts: str | None = Query(None, alias="from"),
         to_ts: str | None = Query(None, alias="to"),
+        hide_types: str | None = None,
+        hide_sources: str | None = None,
+        role: str | None = None,
     ) -> Response:
-        html = render_report_html(db, config, zone, from_ts, to_ts)
+        fs = FilterSet.from_query(hide_types, hide_sources, role)
+        html = render_report_html(db, config, zone, from_ts, to_ts, filterset=fs)
         return Response(content=html, media_type="text/html")
 
     @router.get("/zones/{zone}/report.pdf")
@@ -262,8 +302,12 @@ def build_router(db: Database, config: Config) -> APIRouter:
         zone: str,
         from_ts: str | None = Query(None, alias="from"),
         to_ts: str | None = Query(None, alias="to"),
+        hide_types: str | None = None,
+        hide_sources: str | None = None,
+        role: str | None = None,
     ) -> Response:
-        pdf = render_report_pdf(db, config, zone, from_ts, to_ts)
+        fs = FilterSet.from_query(hide_types, hide_sources, role)
+        pdf = render_report_pdf(db, config, zone, from_ts, to_ts, filterset=fs)
         return Response(content=pdf, media_type="application/pdf")
 
     return router

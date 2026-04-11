@@ -9,8 +9,42 @@
 </p>
 
 <p>
-  <a class="action" href="/zones/{{ zone.name }}/report.html">Export HTML report</a>
-  <a class="action" href="/zones/{{ zone.name }}/report.pdf">Export PDF report</a>
+  <a class="action" href="/zones/{{ zone.name }}/report.html{% if filterset and filterset.is_active() %}?{% if hide_types %}hide_types={{ hide_types }}&{% endif %}{% if hide_sources %}hide_sources={{ hide_sources }}&{% endif %}{% if role and role != 'all' %}role={{ role }}{% endif %}{% endif %}">Export HTML report</a>
+  <a class="action" href="/zones/{{ zone.name }}/report.pdf{% if filterset and filterset.is_active() %}?{% if hide_types %}hide_types={{ hide_types }}&{% endif %}{% if hide_sources %}hide_sources={{ hide_sources }}&{% endif %}{% if role and role != 'all' %}role={{ role }}{% endif %}{% endif %}">Export PDF report</a>
+</p>
+
+<form method="get" class="filters">
+  <label>
+    Role
+    <select name="role">
+      <option value="all"{% if role == 'all' %} selected{% endif %}>all</option>
+      <option value="KSK"{% if role == 'KSK' %} selected{% endif %}>KSK</option>
+      <option value="ZSK"{% if role == 'ZSK' %} selected{% endif %}>ZSK</option>
+      <option value="CSK"{% if role == 'CSK' %} selected{% endif %}>CSK</option>
+    </select>
+  </label>
+  <label class="preset-check">
+    <input type="checkbox" name="hide_types_preset" value="rrsig,soa"{% if hide_types == 'rrsig,soa' %} checked{% endif %}>
+    DNSKEY focus
+  </label>
+  <label>
+    Hide types
+    <input type="text" name="hide_types" value="{{ hide_types or '' }}" placeholder="rrsig,soa or any regex">
+    <span class="hint">regex</span>
+  </label>
+  <label>
+    Hide sources
+    <input type="text" name="hide_sources" value="{{ hide_sources or '' }}" placeholder="dns,rndc,state,key,syslog,named">
+  </label>
+  <button type="submit">Apply</button>
+  <a class="clear" href="/zones/{{ zone.name }}">Clear</a>
+</form>
+<p class="meta filter-note">
+  Role filter keeps events for the chosen role plus zone-wide events
+  with no role (DS, SOA). <strong>DNSKEY focus</strong> is a preset for
+  <code>hide_types=rrsig,soa</code>; tick either the checkbox or type a
+  free-form <code>re.search</code> pattern list — the checkbox wins if
+  both are present. Invalid regexes are silently ignored.
 </p>
 
 <h3>Keys</h3>

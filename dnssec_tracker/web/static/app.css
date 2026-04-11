@@ -256,6 +256,41 @@ table th { background: var(--surface-alt); font-weight: 600; }
 .filters .clear:hover { color: var(--fg); }
 .filter-note { margin: 0 0 1rem; font-size: 0.82rem; }
 
+/* The "DNSKEY focus" preset checkbox lives alongside the regular
+ * stacked labels, but its own label flows horizontally so the
+ * checkbox sits next to the text. */
+.filters label.preset-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.35rem;
+  padding-bottom: 0.3rem;
+  color: var(--fg);
+  font-size: 0.9rem;
+}
+.filters select {
+  padding: 0.28rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+/* Filter-summary banner used on the report when a FilterSet is
+ * active. Scoped inside body.report so the active variables are
+ * always the light palette. */
+.report .filter-summary {
+  margin: 1rem 0;
+  padding: 0.6rem 0.9rem;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 3px;
+  font-size: 0.9rem;
+  color: var(--fg);
+}
+
 .meta { color: var(--muted); font-size: 0.9rem; }
 .refresh-hint {
   background: var(--surface);

@@ -3,6 +3,7 @@ from pathlib import Path
 from dnssec_tracker.config import Config
 from dnssec_tracker.db import Database
 from dnssec_tracker.models import Event, Key, Zone, now_iso
+from dnssec_tracker.render.filtering import FilterSet
 from dnssec_tracker.render.html_export import render_report_html
 from dnssec_tracker.render.timeline_svg import (
     render_rndc_timeline,
@@ -104,3 +105,46 @@ def test_render_report_html(tmp_path):
     # per-key breakdown
     assert "Per-key breakdown" in html
     assert "K*.key file timings" in html
+    # With no filterset, the "Filters applied" summary box must NOT
+    # appear — default reports look identical to before the feature
+    # landed.
+    assert "Filters applied" not in html
+
+
+def test_render_report_html_with_filterset_shows_summary_and_filters(tmp_path):
+    """Report with a FilterSet must (a) render a visible summary box
+    at the top, and (b) filter the actual events table so the
+    filtered-out event_types disappear from the rendered HTML.
+    """
+
+    db, cfg = _seeded_db(tmp_path)
+    # Add a couple of RRSIG events that must be filtered out.
+    db.insert_event(Event(
+        ts="2026-04-10T04:00:00Z", source="dns",
+        event_type="dns_rrsig_refreshed",
+        summary="KSK RRSIG refreshed",
+        zone="example.com", key_tag=12345, key_role="KSK",
+        detail={"rrtype": "RRSIG"},
+    ))
+    db.insert_event(Event(
+        ts="2026-04-10T05:00:00Z", source="dns",
+        event_type="dns_rrsig_refreshed",
+        summary="ZSK RRSIG refreshed",
+        zone="example.com", key_tag=67890, key_role="ZSK",
+        detail={"rrtype": "RRSIG"},
+    ))
+
+    fs = FilterSet(role="KSK", hide_type_patterns=["rrsig"])
+    html = render_report_html(db, cfg, "example.com", filterset=fs)
+
+    # Summary box present with both dimensions
+    assert "Filters applied" in html
+    assert "role=KSK" in html
+    assert "hide_types=rrsig" in html
+    # RRSIG rows filtered out of the chronological event log
+    assert "dns_rrsig_refreshed" not in html
+    assert "KSK RRSIG refreshed" not in html
+    # The ZSK state_changed event from the seed is also gone (role=KSK
+    # would strip it but the seed only has KSK events; just assert
+    # KSK events survive).
+    assert "KSK goal hidden -&gt; omnipresent" in html or "KSK goal hidden -> omnipresent" in html

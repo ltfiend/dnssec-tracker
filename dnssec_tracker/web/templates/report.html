@@ -28,6 +28,12 @@
     </dl>
   </section>
 
+  {% if filterset and filterset.is_active() %}
+  <div class="filter-summary">
+    <strong>Filters applied:</strong> {{ filterset.summary() }}
+  </div>
+  {% endif %}
+
   <section class="summary">
     <h2>Summary</h2>
     <p>{{ executive_summary }}</p>

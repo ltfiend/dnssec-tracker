@@ -1,16 +1,29 @@
 """Chronological event-timeline chart (SVG).
 
 A single horizontal axis covering the window, with every event drawn
-as a coloured dot at its timestamp. Dots are de-overlapped by stacking
-them vertically when timestamps collide within the minimum pixel
-resolution. A handful of the most significant events are labelled
-inline; the rest stay discoverable via the ``<title>`` tooltip.
+as a coloured dot at its timestamp. Events whose pixel x-coordinates
+land within ``cluster_px`` of each other collapse into a single
+cluster circle — during a mass state transition (KRRSIGState +
+DNSKEYState + DSState + GoalState all ticking in the same rndc poll)
+this keeps the chart legible instead of stacking a dozen overlapping
+dots. Sparse streams are unaffected: a singleton cluster renders
+identically to a plain dot, with the same colour and inline label for
+the major event types.
 
-Pure Python, no JS — safe for WeasyPrint and the live UI.
+Clustering is layout-aware — it happens *after* timestamps are
+projected onto the pixel axis — so "two events 200 ms apart on a
+30-day-wide chart" collapse the same way "two events at the exact
+same second on a one-hour chart" do, because both are visually
+indistinguishable anyway.
+
+Pure Python, no JS — safe for WeasyPrint and the live UI. Cluster
+tooltips are plain SVG ``<title>`` children so WeasyPrint renders
+them into the PDF export untouched.
 """
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta, timezone
 from html import escape
 
@@ -54,8 +67,17 @@ def render_event_timeline(
     events: list[Event],
     from_ts: str | None = None,
     to_ts: str | None = None,
+    *,
+    cluster_px: float = 6.0,
 ) -> str:
-    """Return an inline SVG fragment for the event timeline."""
+    """Return an inline SVG fragment for the event timeline.
+
+    ``cluster_px`` is the pixel distance within which two events
+    collapse into a single cluster circle. Default ~6 px — a bit
+    wider than the singleton dot radius so mass-transition bursts
+    merge cleanly without swallowing events that are actually
+    spatially distinct.
+    """
 
     if not events:
         return _empty("No events in the reported window.")
@@ -114,25 +136,55 @@ def render_event_timeline(
             f'fill="currentColor" fill-opacity="0.7">{escape(label)}</text>'
         )
 
-    # Place events. Collision detection: if a dot would land within
-    # ``min_gap`` pixels of another dot at the same Y, stack vertically.
+    # ---- Clustering --------------------------------------------------
+    # Project every in-window event to an (x, event) pair, then walk
+    # the sorted list grouping anything whose x is within cluster_px
+    # of the current cluster's centroid. This is layout-aware: two
+    # events 200 ms apart on a 30-day-wide chart collapse because they
+    # project to the same pixel column, not because their timestamps
+    # are equal.
     min_gap = 10.0
-    dot_radius = 4.5
+    base_radius = 4.5
+    max_radius = 12.0
 
-    # Track placed (x, y) per "band" to de-overlap.
-    placed: list[tuple[float, float]] = []
-
+    projected: list[tuple[float, Event]] = []
     for e in evs:
         t = _parse_ts(e.ts)
         if t < t_start or t > t_end:
             continue
-        x = x_for(t)
-        # Find the lowest y offset that doesn't collide.
+        projected.append((x_for(t), e))
+
+    clusters: list[dict] = []
+    for x, e in projected:
+        if clusters and (x - clusters[-1]["x_last"]) <= cluster_px:
+            c = clusters[-1]
+            c["members"].append(e)
+            c["x_sum"] += x
+            c["x_last"] = x
+            c["x"] = c["x_sum"] / len(c["members"])
+        else:
+            clusters.append({
+                "x": x,
+                "x_sum": x,
+                "x_last": x,
+                "members": [e],
+            })
+
+    # ---- Stacking ----------------------------------------------------
+    # Clusters still de-overlap vertically against each other with the
+    # alternating-bands logic the singleton renderer used. Only the
+    # unit of layout changed (cluster instead of event).
+    placed: list[tuple[float, float]] = []
+
+    for c in clusters:
+        x = c["x"]
+        members = c["members"]
+        count = len(members)
+
         y = axis_y
         offset = 0
         step = 12
         while True:
-            # Alternate above/below the axis
             candidate = axis_y + (offset // 2 + 1) * step * (-1 if offset % 2 == 0 else 1)
             if offset == 0:
                 candidate = axis_y - step  # first stack always above
@@ -145,21 +197,60 @@ def render_event_timeline(
                 break
 
         placed.append((x, y))
-        colour = SOURCE_COLOR_VAR.get(e.source, "var(--muted)")
-        tip = f"{e.ts} [{e.source}] {e.event_type}\n{e.summary}"
-        # Stem line from axis to dot
+
+        # Radius scales with sqrt(count) so a 4-member cluster is
+        # twice the area of a singleton, a 9-member one three times,
+        # etc. Capped at max_radius so a 40-event burst doesn't eat
+        # half the chart.
+        radius = min(base_radius * math.sqrt(count), max_radius)
+
+        # Colour: uniform-source cluster reuses the source's variable,
+        # mixed-source clusters get the neutral --muted fill.
+        sources = {m.source for m in members}
+        if len(sources) == 1:
+            colour = SOURCE_COLOR_VAR.get(next(iter(sources)), "var(--muted)")
+        else:
+            colour = "var(--muted)"
+
+        # Tooltip: one line per member, "<HH:MM:SS> [src] type: summary".
+        # For singleton clusters we keep the legacy "<ts> [src] type\n<summary>"
+        # shape so the existing round-trip test keeps matching.
+        if count == 1:
+            m = members[0]
+            tip = f"{m.ts} [{m.source}] {m.event_type}\n{m.summary}"
+        else:
+            tip = "\n".join(
+                f"{_hhmmss(m.ts)} [{m.source}] {m.event_type}: {m.summary}"
+                for m in members
+            )
+
+        # Stem line from axis to circle
         parts.append(
             f'<line x1="{x:.1f}" y1="{axis_y}" x2="{x:.1f}" y2="{y:.1f}" '
             f'stroke="{colour}" stroke-opacity="0.6" stroke-width="1"/>'
         )
         parts.append(
-            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{dot_radius}" '
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{radius:.2f}" '
             f'fill="{colour}" stroke="currentColor" stroke-opacity="0.3" stroke-width="0.6">'
             f'<title>{escape(tip)}</title></circle>'
         )
-        if e.event_type in LABEL_WORTHY_TYPES:
-            label = _short_label(e)
-            # anchor flips based on whether the dot is above or below the axis
+
+        if count > 1:
+            # Count badge centred in the circle. currentColor with
+            # reduced opacity reads on any palette (dark theme + the
+            # light report stylesheet), no hard-coded colour needed.
+            # dy of 0.33em approximates optical centring.
+            parts.append(
+                f'<text x="{x:.1f}" y="{y:.1f}" dy="0.33em" '
+                f'text-anchor="middle" font-size="9" font-weight="600" '
+                f'fill="currentColor" fill-opacity="0.85" '
+                f'pointer-events="none">{count}</text>'
+            )
+        elif members[0].event_type in LABEL_WORTHY_TYPES:
+            # Singletons get the same inline label they always did —
+            # this branch is the "zero visual regression for sparse
+            # streams" guarantee.
+            label = _short_label(members[0])
             above = y < axis_y
             label_y = y - 8 if above else y + 16
             parts.append(
@@ -188,6 +279,20 @@ def render_event_timeline(
 
     parts.append("</svg>")
     return "".join(parts)
+
+
+def _hhmmss(ts: str) -> str:
+    """Extract ``HH:MM:SS`` from an ISO timestamp for cluster tooltips.
+
+    Falls back to the raw string if the shape is unexpected, so a
+    badly-formed ``ts`` never crashes the renderer.
+    """
+
+    try:
+        t = _parse_ts(ts)
+        return t.strftime("%H:%M:%S")
+    except Exception:  # noqa: BLE001
+        return ts
 
 
 def _fmt_tick(t: datetime, span_sec: float) -> str:
