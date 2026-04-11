@@ -28,3 +28,9 @@ Can you update the readme with a detailed section discussing how much traffic th
 
 ---
 
+## 2026-04-11 06:53:17
+
+First a few fixes.  The dns_dnskey_appeared at zone and dns_ds_appeared_at_parent (and related items I assume) don't show the keyid in the chronological events.  Please capture that.  Also 'soa_appeared_at_zone' could capture the serial number or the whole SOA record at that time.   We should not worry about tracking serial changes though, just if we are capturing SOA events.
+
+---
+

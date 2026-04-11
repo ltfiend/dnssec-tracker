@@ -19,7 +19,10 @@ import asyncio
 import logging
 
 import dns.asyncresolver
+import dns.dnssec
 import dns.exception
+import dns.rdata
+import dns.rdataclass
 import dns.rdatatype
 
 from ..models import Event, now_iso
@@ -77,7 +80,7 @@ class DnsProbeCollector(Collector):
         # RRSIG is pulled in only when querying with DO bit; we
         # approximate by asking for the RRSIG cover of DNSKEY via a
         # generic RRSIG query (works against authoritative servers).
-        snapshot["RRSIG_DNSKEY"] = await self._query_rrset(zone, "RRSIG")
+        snapshot["RRSIG"] = await self._query_rrset(zone, "RRSIG")
 
         prev = self.db.get_snapshot(self.name, f"zone:{zone}")
         self._emit_diff(zone, "dns", prev, snapshot, parent=False)
@@ -113,36 +116,165 @@ class DnsProbeCollector(Collector):
     ) -> None:
         prev = previous or {}
         for rrtype, rrs in current.items():
+            if rrtype == "SOA":
+                # SOA gets special handling — we only emit on
+                # presence/absence transitions, never on simple serial
+                # bumps, because dnssec-policy re-signs and bumps the
+                # serial on a schedule and nobody wants that in the
+                # event log.
+                self._emit_soa_transition(
+                    zone, source, prev.get("SOA", []), rrs, parent
+                )
+                continue
+
             old = prev.get(rrtype, [])
             if old == rrs:
                 continue
             added = sorted(set(rrs) - set(old))
             removed = sorted(set(old) - set(rrs))
-            if added:
-                self.db.insert_event(
-                    Event(
-                        ts=now_iso(),
-                        source=source,
-                        event_type=_observe_event(rrtype, parent, added=True),
-                        summary=f"{rrtype} added at {'parent' if parent else 'zone'} for {zone}: {len(added)} record(s)",
-                        zone=zone,
-                        detail={"added": added, "parent": parent, "rrtype": rrtype},
-                    )
+            for rr in added:
+                self._emit_record_event(
+                    zone, source, rrtype, rr, parent, change="appeared"
                 )
-            if removed:
-                self.db.insert_event(
-                    Event(
-                        ts=now_iso(),
-                        source=source,
-                        event_type=_observe_event(rrtype, parent, added=False),
-                        summary=f"{rrtype} removed at {'parent' if parent else 'zone'} for {zone}: {len(removed)} record(s)",
-                        zone=zone,
-                        detail={"removed": removed, "parent": parent, "rrtype": rrtype},
-                    )
+            for rr in removed:
+                self._emit_record_event(
+                    zone, source, rrtype, rr, parent, change="disappeared"
                 )
 
+    def _emit_record_event(
+        self,
+        zone: str,
+        source: str,
+        rrtype: str,
+        record: str,
+        parent: bool,
+        *,
+        change: str,
+    ) -> None:
+        """Emit one event per record, enriched with the key tag when we
+        can extract it from the record text."""
 
-def _observe_event(rrtype: str, parent: bool, *, added: bool) -> str:
-    direction = "appeared" if added else "disappeared"
-    loc = "parent" if parent else "zone"
-    return f"dns_{rrtype.lower()}_{direction}_at_{loc}"
+        loc = "parent" if parent else "zone"
+        key_tag = _extract_key_tag(rrtype, record)
+        tag_bit = f" (key tag {key_tag})" if key_tag is not None else ""
+        # RRSIG events are worth distinguishing by covered type in the
+        # summary — "RRSIG over DNSKEY (key tag 12345) appeared" is much
+        # more useful than just "RRSIG appeared".
+        covered = _rrsig_covered_type(record) if rrtype == "RRSIG" else None
+        covered_bit = f" over {covered}" if covered else ""
+        summary = (
+            f"{rrtype}{covered_bit}{tag_bit} {change} at {loc} for {zone}"
+        )
+        self.db.insert_event(
+            Event(
+                ts=now_iso(),
+                source=source,
+                event_type=f"dns_{rrtype.lower()}_{change}_at_{loc}",
+                summary=summary,
+                zone=zone,
+                key_tag=key_tag,
+                detail={
+                    "rrtype": rrtype,
+                    "parent": parent,
+                    "record": record,
+                    "key_tag": key_tag,
+                    "covered_type": covered,
+                },
+            )
+        )
+
+    def _emit_soa_transition(
+        self,
+        zone: str,
+        source: str,
+        old_rrs: list[str],
+        new_rrs: list[str],
+        parent: bool,
+    ) -> None:
+        was_present = bool(old_rrs)
+        is_present = bool(new_rrs)
+        if was_present == is_present:
+            # Either never seen (nothing to report yet) or still
+            # present — a plain serial bump lands here and is
+            # intentionally ignored.
+            return
+
+        loc = "parent" if parent else "zone"
+        if is_present and not was_present:
+            record = new_rrs[0]
+            serial = _soa_serial(record)
+            summary = (
+                f"SOA observed at {loc} for {zone}"
+                + (f" (serial {serial})" if serial is not None else "")
+            )
+            self.db.insert_event(
+                Event(
+                    ts=now_iso(),
+                    source=source,
+                    event_type=f"dns_soa_appeared_at_{loc}",
+                    summary=summary,
+                    zone=zone,
+                    detail={
+                        "rrtype": "SOA",
+                        "parent": parent,
+                        "record": record,
+                        "serial": serial,
+                    },
+                )
+            )
+        else:  # was present, now absent
+            self.db.insert_event(
+                Event(
+                    ts=now_iso(),
+                    source=source,
+                    event_type=f"dns_soa_disappeared_at_{loc}",
+                    summary=f"SOA no longer answerable at {loc} for {zone}",
+                    zone=zone,
+                    detail={"rrtype": "SOA", "parent": parent},
+                )
+            )
+
+
+def _extract_key_tag(rrtype: str, rdata_text: str) -> int | None:
+    """Best-effort: pull the key tag out of a DNSKEY/CDNSKEY/DS/CDS/RRSIG
+    record in its text form. Returns ``None`` for any record we don't
+    know how to classify, or if parsing fails.
+
+    * DS/CDS — first token is the key tag.
+    * RRSIG  — field 6 (``type algo labels ttl exp inc KEYTAG signer sig``).
+    * DNSKEY/CDNSKEY — parsed via dnspython and ``dns.dnssec.key_id()``.
+    """
+
+    try:
+        if rrtype in ("DS", "CDS"):
+            return int(rdata_text.split()[0])
+        if rrtype == "RRSIG":
+            parts = rdata_text.split()
+            if len(parts) < 7:
+                return None
+            return int(parts[6])
+        if rrtype in ("DNSKEY", "CDNSKEY"):
+            # DNSKEY and CDNSKEY share the same wire format, so we parse
+            # both as DNSKEY and let dnspython compute the key tag.
+            rdata = dns.rdata.from_text(
+                dns.rdataclass.IN, dns.rdatatype.DNSKEY, rdata_text
+            )
+            return dns.dnssec.key_id(rdata)
+    except (ValueError, IndexError, dns.exception.DNSException):
+        return None
+    return None
+
+
+def _rrsig_covered_type(rdata_text: str) -> str | None:
+    """First token of an RRSIG rdata is the type it covers."""
+    try:
+        return rdata_text.split()[0]
+    except (IndexError, AttributeError):
+        return None
+
+
+def _soa_serial(rdata_text: str) -> int | None:
+    try:
+        return int(rdata_text.split()[2])
+    except (ValueError, IndexError):
+        return None
