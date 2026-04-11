@@ -2,9 +2,9 @@
 level with the server IP, query name, qtype, protocol, and (on
 receive) the rcode, answer count, and elapsed time.
 
-The DNS probe is exercised by patching out the real resolver so we
-don't hit the network; the rndc exec is exercised by patching
-``asyncio.create_subprocess_exec``.
+The DNS probe is exercised via the low-level ``_query_one`` helper
+with a patched ``dns.asyncquery.udp`` so we don't hit the network.
+The rndc exec is exercised by patching ``asyncio.create_subprocess_exec``.
 """
 
 from __future__ import annotations
@@ -13,15 +13,21 @@ import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from dnssec_tracker.collectors.dns_probe import DnsProbeCollector
+import dns.flags
+import dns.rcode
+import dns.rdatatype
+
+from dnssec_tracker.collectors.dns_probe import (
+    DnsProbeCollector,
+    _TransientError,
+)
 from dnssec_tracker.collectors.rndc_status import RndcStatusCollector
 from dnssec_tracker.config import Config
 from dnssec_tracker.db import Database
-from dnssec_tracker.models import Zone
 
 
 def _cfg(tmp_path: Path) -> Config:
@@ -43,142 +49,139 @@ def _at_info(caplog, logger_name: str) -> list[str]:
     ]
 
 
-# ---- dns_probe -----------------------------------------------------
-
-class _FakeRRset(list):
-    """Minimal RRset: behaves like a list of str."""
+# ---- fake DNS response helpers -----------------------------------
 
 
-class _FakeAnswer:
-    def __init__(self, rrset, rcode_text="NOERROR", tc=False):
-        import dns.flags
-        import dns.rcode
-        self.rrset = rrset
-        # Build just enough of a response to let the collector pull
-        # rcode via ans.response.rcode() and ans.response.flags & TC.
-        rcode_value = {"NOERROR": 0, "NXDOMAIN": 3}.get(rcode_text, 0)
-        self.response = SimpleNamespace(
-            rcode=lambda rc=rcode_value: rc,
-            flags=(dns.flags.TC if tc else 0),
-        )
+class _FakeRRset:
+    """Tiny RRset stand-in for building fake ``dns.message`` answers.
+
+    Matches the attributes ``_query_one`` reads: ``rdtype`` and
+    iteration yielding string-convertible rdata.
+    """
+
+    def __init__(self, rdtype_text: str, rdata: list[str]):
+        self.rdtype = dns.rdatatype.from_text(rdtype_text)
+        self._rdata = rdata
+
+    def __iter__(self):
+        return iter(self._rdata)
 
 
-def _make_resolver_answer(records, rcode="NOERROR", tc=False):
-    return _FakeAnswer(_FakeRRset(records), rcode_text=rcode, tc=tc)
+def _fake_response(
+    answer_rrsets: list[_FakeRRset],
+    rcode: int = dns.rcode.NOERROR,
+    tc: bool = False,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        rcode=lambda rc=rcode: rc,
+        flags=(dns.flags.TC if tc else 0),
+        answer=answer_rrsets,
+    )
+
+
+# ---- dns_probe ---------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_dns_probe_logs_zone_query(tmp_path, caplog):
+async def test_query_one_logs_send_and_recv(tmp_path, caplog):
     caplog.set_level(logging.INFO, logger="dnssec_tracker.query.dns")
-
     col = DnsProbeCollector(_cfg(tmp_path), Database(tmp_path / "events.db"))
-    col._resolver.resolve = AsyncMock(
-        return_value=_make_resolver_answer(["257 3 13 fake"])
-    )
 
-    result = await col._query_rrset("example.com", "DNSKEY", role="zone")
-    assert result == ["257 3 13 fake"]
+    resp = _fake_response([_FakeRRset("DNSKEY", ["257 3 13 fakepk"])])
+    with patch("dns.asyncquery.udp", AsyncMock(return_value=resp)) as udp:
+        result = await col._query_one(
+            "192.0.2.10", "ns1.example.com",
+            "example.com", "DNSKEY", role="zone",
+        )
+
+    # The low-level query was aimed at the exact NS IP.
+    udp.assert_called_once()
+    assert udp.call_args.args[1] == "192.0.2.10"
+    assert result["DNSKEY"] == ["257 3 13 fakepk"]
 
     msgs = _at_info(caplog, "dnssec_tracker.query.dns")
-    assert len(msgs) == 2, f"expected send+recv, got {msgs}"
+    assert len(msgs) == 2
     send, recv = msgs
-
-    # "send" line
-    assert "send:" in send
-    assert "server=127.0.0.1:53" in send
+    # Both lines must carry the auth NS IP and hostname so a single
+    # grep tells you exactly which server answered which query.
+    assert "server=192.0.2.10:53" in send
+    assert "ns=ns1.example.com" in send
     assert "protocol=UDP" in send
     assert "role=zone" in send
     assert "name=example.com" in send
     assert "type=DNSKEY" in send
-    assert "timeout=5.0s" in send
-
-    # "recv" line
-    assert "recv:" in recv
-    assert "server=127.0.0.1:53" in recv
-    assert "role=zone" in recv
-    assert "name=example.com" in recv
-    assert "type=DNSKEY" in recv
-    assert "rcode=NOERROR" in recv
-    assert "answers=1" in recv
-    assert "elapsed_ms=" in recv
-
-
-@pytest.mark.asyncio
-async def test_dns_probe_logs_parent_ds_query_with_role_parent(tmp_path, caplog):
-    caplog.set_level(logging.INFO, logger="dnssec_tracker.query.dns")
-
-    cfg = _cfg(tmp_path)
-    db = Database(cfg.db_path)
-    db.upsert_zone(Zone(name="example.com", key_dir=str(tmp_path)))
-
-    col = DnsProbeCollector(cfg, db)
-    col._resolver.resolve = AsyncMock(
-        return_value=_make_resolver_answer(
-            ["12345 13 2 9e6c7a4d64e0a8b5bdfd1ed4bb6f3e9b"]
-        )
-    )
-
-    await col._probe_parent("example.com")
-
-    msgs = _at_info(caplog, "dnssec_tracker.query.dns")
-    # One send + one recv for the single DS query.
-    assert len(msgs) == 2
-    send, recv = msgs
-    assert "role=parent" in send
-    assert "name=example.com" in send
-    assert "type=DS" in send
-    assert "role=parent" in recv
+    assert "server=192.0.2.10:53" in recv
+    assert "ns=ns1.example.com" in recv
     assert "rcode=NOERROR" in recv
     assert "answers=1" in recv
 
 
 @pytest.mark.asyncio
-async def test_dns_probe_logs_failure_at_warning(tmp_path, caplog):
+async def test_query_one_upgrades_protocol_on_tc_fallback(tmp_path, caplog):
     caplog.set_level(logging.INFO, logger="dnssec_tracker.query.dns")
-
-    import dns.exception
     col = DnsProbeCollector(_cfg(tmp_path), Database(tmp_path / "events.db"))
-    col._resolver.resolve = AsyncMock(
-        side_effect=dns.exception.Timeout("no response")
-    )
-    result = await col._query_rrset("example.com", "DNSKEY", role="zone")
-    assert result == []
 
-    # The send line is INFO, the failure is WARNING; both should be
-    # captured by caplog at INFO+ level.
+    udp_resp = _fake_response([_FakeRRset("DNSKEY", [])], tc=True)
+    tcp_resp = _fake_response([_FakeRRset("DNSKEY", ["257 3 13 fakepk"])])
+    with patch("dns.asyncquery.udp", AsyncMock(return_value=udp_resp)), \
+         patch("dns.asyncquery.tcp", AsyncMock(return_value=tcp_resp)):
+        await col._query_one(
+            "192.0.2.10", "ns1.example.com",
+            "example.com", "DNSKEY", role="zone",
+        )
+
+    recv = [m for m in _at_info(caplog, "dnssec_tracker.query.dns") if "recv:" in m][-1]
+    assert "protocol=UDP+TCP" in recv
+
+
+@pytest.mark.asyncio
+async def test_query_one_raises_transient_on_servfail(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="dnssec_tracker.query.dns")
+    col = DnsProbeCollector(_cfg(tmp_path), Database(tmp_path / "events.db"))
+
+    resp = _fake_response([], rcode=dns.rcode.SERVFAIL)
+    with patch("dns.asyncquery.udp", AsyncMock(return_value=resp)):
+        with pytest.raises(_TransientError):
+            await col._query_one(
+                "192.0.2.10", "ns1.example.com",
+                "example.com", "DNSKEY", role="zone",
+            )
+
     records = [
         r for r in caplog.records
         if r.name == "dnssec_tracker.query.dns"
     ]
-    levels = [r.levelname for r in records]
-    assert "INFO" in levels
-    assert "WARNING" in levels
-    failure = [r for r in records if r.levelname == "WARNING"][0]
-    assert "FAILED" in failure.getMessage()
-    assert "Timeout" in failure.getMessage()
+    warnings = [r for r in records if r.levelname == "WARNING"]
+    assert warnings
+    assert "rcode=SERVFAIL" in warnings[-1].getMessage()
+    assert "RETRY_NEXT_NS" in warnings[-1].getMessage()
 
 
 @pytest.mark.asyncio
-async def test_dns_probe_logs_tc_upgrade_protocol_tag(tmp_path, caplog):
+async def test_query_one_raises_transient_on_timeout(tmp_path, caplog):
     caplog.set_level(logging.INFO, logger="dnssec_tracker.query.dns")
-
     col = DnsProbeCollector(_cfg(tmp_path), Database(tmp_path / "events.db"))
-    col._resolver.resolve = AsyncMock(
-        return_value=_make_resolver_answer(["fake"], tc=True)
-    )
-    await col._query_rrset("example.com", "DNSKEY", role="zone")
 
-    recv = [
-        r.getMessage()
-        for r in caplog.records
-        if r.name == "dnssec_tracker.query.dns"
-        and "recv:" in r.getMessage()
-    ][-1]
-    # A truncated response means we know a TCP retry happened.
-    assert "protocol=UDP+TCP" in recv
+    import dns.exception
+    with patch(
+        "dns.asyncquery.udp",
+        AsyncMock(side_effect=dns.exception.Timeout("no response")),
+    ):
+        with pytest.raises(_TransientError):
+            await col._query_one(
+                "192.0.2.10", "ns1.example.com",
+                "example.com", "DNSKEY", role="zone",
+            )
+
+    warnings = [
+        r for r in caplog.records
+        if r.name == "dnssec_tracker.query.dns" and r.levelname == "WARNING"
+    ]
+    assert any("Timeout" in r.getMessage() for r in warnings)
 
 
 # ---- rndc_status ---------------------------------------------------
+
 
 class _FakeProc:
     def __init__(self, stdout: bytes, stderr: bytes = b"", rc: int = 0):
@@ -215,8 +218,6 @@ async def test_rndc_status_logs_exec_command_and_result(tmp_path, caplog):
     msgs = _at_info(caplog, "dnssec_tracker.query.rndc")
     assert len(msgs) == 2, f"expected send+recv, got {msgs}"
     send, recv = msgs
-
-    # send: full argv with all rndc flags
     assert "send:" in send
     assert "zone=example.com" in send
     assert "server=127.0.0.1:953" in send
@@ -225,8 +226,6 @@ async def test_rndc_status_logs_exec_command_and_result(tmp_path, caplog):
     assert "-s 127.0.0.1" in send
     assert "-p 953" in send
     assert "dnssec -status example.com" in send
-
-    # recv: rc + byte counts + elapsed
     assert "recv:" in recv
     assert "rc=0" in recv
     assert f"stdout_bytes={len(fake_stdout)}" in recv

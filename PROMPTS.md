@@ -52,3 +52,9 @@ Let's add additonal logging for the tracker tool.  I need to be able to see exac
 
 ---
 
+## 2026-04-11 08:04:26
+
+Let's change the behavior to query the authoriative name servers for the zones and the actual parents (e.g. a.gtld-servers.net is a parent server to fus3d.net). As long as we get a response from 1 server we can assume it's good (e.g. query a.gtld-servers.net for fus3d.net DS and find a new DS, mark it, you don't need to confirm with ALL authoritative servers).  Obviously deal with some error checking if a server is in SERVFAIL status.
+
+---
+

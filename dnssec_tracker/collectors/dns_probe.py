@@ -1,16 +1,34 @@
-"""Collector that queries DNS directly to observe what the zone (and its
-parent) publishes.
+"""Collector that queries authoritative nameservers directly to observe
+what a zone (and its real parent delegation) publishes.
 
-Runs two loops per zone at independent cadences:
+Pass cadence is unchanged:
 
-* ``query_interval`` (default 60 s) queries the local resolver for the
-  zone's own DNSKEY, SOA, CDS, and CDNSKEY records.
-* ``parent_interval`` (default 300 s) queries a parent authoritative
-  server for the DS record.
+* ``query_interval`` (default 60 s): every discovered zone's own
+  authoritative NS set is queried for DNSKEY / SOA / CDS / CDNSKEY.
+* ``parent_interval`` (default 300 s): for every zone we derive the
+  parent zone (``fus3d.net`` → ``net``, ``net`` → ``.``), discover
+  the parent's authoritative NS set, and ask one of those NS for the
+  DS record of the child. So for ``fus3d.net`` we end up literally
+  querying (for example) ``a.gtld-servers.net`` for ``fus3d.net DS``,
+  which is the authoritative answer rather than whatever a caching
+  recursor happens to remember.
 
-On each pass it diffs the observed RRset against the previous snapshot
-and emits events for DNSKEY/RRSIG/CDS/CDNSKEY/DS appearance and
-disappearance.
+NS discovery itself still rides through the configured
+``local_resolver`` — it's used purely as plumbing to turn
+``example.com NS`` into a list of ``(ip, ns-hostname)`` tuples. The
+observation queries that produce events never go through the
+recursor.
+
+**"Any one good server is enough"** — for each authoritative NS list
+we walk the servers in order and keep the first clean response
+(``NOERROR`` or ``NXDOMAIN``). SERVFAIL, REFUSED, timeouts and
+socket errors are treated as retryable and fall through to the next
+NS. Only when every NS fails does the query come back empty and we
+log a WARNING.
+
+On each pass we diff the observed RRset against the previous
+snapshot and emit events for DNSKEY/RRSIG/CDS/CDNSKEY/DS appearance
+and disappearance (see ``_emit_diff``).
 """
 
 from __future__ import annotations
@@ -19,10 +37,12 @@ import asyncio
 import logging
 import time
 
+import dns.asyncquery
 import dns.asyncresolver
 import dns.dnssec
 import dns.exception
 import dns.flags
+import dns.message
 import dns.rcode
 import dns.rdata
 import dns.rdataclass
@@ -35,17 +55,33 @@ log = logging.getLogger("dnssec_tracker.collector.dns_probe")
 query_log = logging.getLogger("dnssec_tracker.query.dns")
 
 
+# Cache TTL for NS discovery: how long we trust a "NS + their A" lookup
+# before re-resolving. The default matches parent_interval so once we
+# know a zone's delegation we don't re-resolve it mid-cycle.
+_NEG_CACHE_SECONDS = 60
+
+
+class _TransientError(Exception):
+    """Raised by :meth:`DnsProbeCollector._query_one` to tell
+    ``_auth_query`` the current authoritative NS isn't usable and it
+    should fall through to the next one in the list."""
+
+
 class DnsProbeCollector(Collector):
     name = "dns_probe"
 
     def __init__(self, config, db):
         super().__init__(config, db)
         host, _, port = config.local_resolver.partition(":")
-        self._resolver = dns.asyncresolver.Resolver(configure=False)
-        self._resolver.nameservers = [host or "127.0.0.1"]
-        self._resolver.port = int(port) if port else 53
-        self._resolver.lifetime = config.query_timeout
+        # Recursor used only for NS / A discovery, never for the
+        # DNSSEC observation queries themselves.
+        self._recursor = dns.asyncresolver.Resolver(configure=False)
+        self._recursor.nameservers = [host or "127.0.0.1"]
+        self._recursor.port = int(port) if port else 53
+        self._recursor.lifetime = config.query_timeout
         self._last_parent_ts = 0.0
+        # NS-discovery cache: zone -> (monotonic_expires_at, [(ip, hostname), ...])
+        self._ns_cache: dict[str, tuple[float, list[tuple[str, str]]]] = {}
 
     async def run(self) -> None:
         loop = asyncio.get_event_loop()
@@ -88,108 +124,260 @@ class DnsProbeCollector(Collector):
             await self._pass(loop.time(), force=True)
 
     async def _probe_zone(self, zone: str) -> None:
-        snapshot: dict[str, list[str]] = {}
+        ns_list = await self._get_authoritative_ns(zone)
+        if not ns_list:
+            log.warning("no reachable authoritative NS for zone %s", zone)
+            return
+
+        snapshot: dict[str, list[str]] = {
+            "DNSKEY": [],
+            "SOA": [],
+            "CDS": [],
+            "CDNSKEY": [],
+            "RRSIG": [],
+        }
+        # One query per observation rrtype. Each response is parsed
+        # whole so RRSIG records present in the answer section (which
+        # only show up because we set DO=1) are accumulated into the
+        # snapshot's RRSIG bucket alongside the primary rrset.
+        rrsig_acc: list[str] = []
         for rrtype in ("DNSKEY", "SOA", "CDS", "CDNSKEY"):
-            snapshot[rrtype] = await self._query_rrset(zone, rrtype, role="zone")
-        # RRSIG is pulled in only when querying with DO bit; we
-        # approximate by asking for the RRSIG cover of DNSKEY via a
-        # generic RRSIG query (works against authoritative servers).
-        snapshot["RRSIG"] = await self._query_rrset(zone, "RRSIG", role="zone")
+            result = await self._auth_query(ns_list, zone, rrtype, role="zone")
+            snapshot[rrtype] = result.get(rrtype, [])
+            rrsig_acc.extend(result.get("RRSIG", []))
+        snapshot["RRSIG"] = sorted(set(rrsig_acc))
 
         prev = self.db.get_snapshot(self.name, f"zone:{zone}")
         self._emit_diff(zone, "dns", prev, snapshot, parent=False)
         self.db.set_snapshot(self.name, f"zone:{zone}", snapshot)
 
     async def _probe_parent(self, zone: str) -> None:
-        # For DS queries we ask the configured local resolver — a
-        # recursive resolver will chase the delegation to the parent,
-        # which is good enough for long-window observation. The query
-        # log marks this as role=parent so it's easy to tell apart
-        # from zone-side DNS traffic.
-        rrs = await self._query_rrset(zone, "DS", role="parent")
-        snapshot = {"DS": rrs}
+        parent = _parent_zone(zone)
+        if parent is None:
+            log.info("zone %s is the root; no parent DS to observe", zone)
+            return
+
+        ns_list = await self._get_authoritative_ns(parent)
+        if not ns_list:
+            log.warning(
+                "no reachable authoritative NS for parent %s of %s",
+                parent, zone,
+            )
+            return
+
+        result = await self._auth_query(ns_list, zone, "DS", role="parent")
+        snapshot = {"DS": result.get("DS", [])}
+
         prev = self.db.get_snapshot(self.name, f"parent:{zone}")
         self._emit_diff(zone, "dns", prev, snapshot, parent=True)
         self.db.set_snapshot(self.name, f"parent:{zone}", snapshot)
 
-    async def _query_rrset(
-        self, name: str, rrtype: str, *, role: str = "zone"
-    ) -> list[str]:
-        """Send one DNS query and return the sorted rdata text list.
+    async def _get_authoritative_ns(
+        self, zone: str
+    ) -> list[tuple[str, str]]:
+        """Resolve *zone*'s authoritative NS set to a list of
+        ``(ip, hostname)`` pairs via the local recursor, caching the
+        result so we don't re-discover every pass.
 
-        Every query emits a structured INFO-level log line on both
-        send and receive, so operators can see exactly what went out
-        and what came back. The fields are::
-
-            server=<ip>:<port> protocol=<UDP|TCP> role=<zone|parent>
-            name=<qname> type=<qtype> timeout=<seconds>
-            rcode=<NOERROR|...> answers=<n> elapsed_ms=<float>
-
-        Individual answer records are logged at DEBUG level so you
-        can dump them with ``--log-level DEBUG`` if you need the
-        wire-form payload for offline analysis, without flooding
-        INFO under normal operation.
+        Returns ``[]`` on failure; negative results are cached briefly
+        so a flapping recursor doesn't hammer us.
         """
 
-        server = (
-            self._resolver.nameservers[0]
-            if self._resolver.nameservers
-            else "?"
+        now = time.monotonic()
+        cached = self._ns_cache.get(zone)
+        if cached and cached[0] > now:
+            return cached[1]
+
+        rec_host = (
+            self._recursor.nameservers[0]
+            if self._recursor.nameservers else "?"
         )
-        port = self._resolver.port or 53
-        # dnspython's asyncresolver uses UDP by default with automatic
-        # TCP fallback on a truncated response; we note the nominal
-        # protocol here and upgrade the log line to "UDP+TCP" below if
-        # the response we received has the TC bit set, which means a
-        # TCP retry happened.
-        protocol = "UDP"
-        timeout = float(self._resolver.lifetime or 0.0)
+        rec_port = self._recursor.port or 53
+        query_log.info(
+            "discover: zone=%s (resolving NS+A via recursor %s:%s)",
+            zone, rec_host, rec_port,
+        )
+
+        ns_names: list[str] = []
+        try:
+            ns_ans = await self._recursor.resolve(
+                zone, "NS", raise_on_no_answer=False
+            )
+            if ns_ans.rrset is not None:
+                ns_names = [
+                    str(r.target).rstrip(".") for r in ns_ans.rrset
+                ]
+        except (dns.exception.DNSException, OSError) as exc:
+            query_log.warning(
+                "discover: zone=%s NS lookup FAILED %s=%s",
+                zone, type(exc).__name__, exc,
+            )
+            self._ns_cache[zone] = (now + _NEG_CACHE_SECONDS, [])
+            return []
+
+        ns_list: list[tuple[str, str]] = []
+        for name in ns_names:
+            try:
+                a_ans = await self._recursor.resolve(
+                    name, "A", raise_on_no_answer=False
+                )
+                if a_ans.rrset is not None:
+                    for r in a_ans.rrset:
+                        ns_list.append((str(r.address), name))
+            except (dns.exception.DNSException, OSError) as exc:
+                query_log.debug(
+                    "discover: zone=%s NS %s A lookup FAILED %s=%s",
+                    zone, name, type(exc).__name__, exc,
+                )
+                continue
 
         query_log.info(
-            "send: server=%s:%s protocol=%s role=%s name=%s type=%s timeout=%.1fs",
-            server, port, protocol, role, name, rrtype, timeout,
+            "discover: zone=%s ns_count=%d ips=%s",
+            zone, len(ns_list), [ip for ip, _ in ns_list],
+        )
+
+        cache_ttl = (
+            self.config.parent_interval
+            if ns_list else _NEG_CACHE_SECONDS
+        )
+        self._ns_cache[zone] = (now + cache_ttl, ns_list)
+        return ns_list
+
+    async def _auth_query(
+        self,
+        ns_list: list[tuple[str, str]],
+        name: str,
+        rrtype: str,
+        *,
+        role: str,
+    ) -> dict[str, list[str]]:
+        """Walk the NS list until one answers cleanly.
+
+        Returns a ``{rrtype: sorted list of rdata strings}`` dict of
+        every rrset observed in the winning response's answer
+        section. Empty dict if every NS in the list fails.
+        """
+
+        last_err: str | None = None
+        for ip, hostname in ns_list:
+            try:
+                return await self._query_one(
+                    ip, hostname, name, rrtype, role=role
+                )
+            except _TransientError as exc:
+                last_err = str(exc)
+                continue
+
+        query_log.warning(
+            "all authoritative NS failed for %s %s role=%s (last error: %s)",
+            name, rrtype, role, last_err,
+        )
+        return {}
+
+    async def _query_one(
+        self,
+        ns_ip: str,
+        ns_hostname: str,
+        name: str,
+        rrtype: str,
+        *,
+        role: str,
+    ) -> dict[str, list[str]]:
+        """Send a single authoritative query to a specific NS IP.
+
+        Always sets ``DO=1`` via EDNS with a 1232-byte buffer so the
+        response includes RRSIG records alongside the primary rrset.
+        Turns off ``RD`` since we're asking an authoritative server.
+
+        Raises :class:`_TransientError` on SERVFAIL, REFUSED, timeout,
+        or any socket error so ``_auth_query`` can try the next NS.
+        ``NXDOMAIN`` is treated as a valid authoritative answer
+        (empty rrset) and is *not* retried.
+        """
+
+        timeout = float(self.config.query_timeout)
+        rdtype = dns.rdatatype.from_text(rrtype)
+        q = dns.message.make_query(
+            name, rdtype, want_dnssec=True, payload=1232
+        )
+        q.flags &= ~dns.flags.RD
+        protocol = "UDP"
+
+        query_log.info(
+            "send: server=%s:53 ns=%s protocol=%s role=%s name=%s type=%s timeout=%.1fs",
+            ns_ip, ns_hostname, protocol, role, name, rrtype, timeout,
         )
 
         start = time.monotonic()
         try:
-            ans = await self._resolver.resolve(
-                name, rrtype, raise_on_no_answer=False
+            resp = await dns.asyncquery.udp(
+                q, ns_ip, timeout=timeout, port=53
             )
-        except (dns.exception.DNSException, OSError) as exc:
-            elapsed_ms = (time.monotonic() - start) * 1000
+        except (dns.exception.Timeout, OSError, dns.exception.DNSException) as exc:
+            elapsed = (time.monotonic() - start) * 1000
             query_log.warning(
-                "recv: server=%s:%s role=%s name=%s type=%s FAILED %s=%s elapsed_ms=%.1f",
-                server, port, role, name, rrtype,
-                type(exc).__name__, exc, elapsed_ms,
+                "recv: server=%s:53 ns=%s role=%s name=%s type=%s FAILED %s=%s elapsed_ms=%.1f",
+                ns_ip, ns_hostname, role, name, rrtype,
+                type(exc).__name__, exc, elapsed,
             )
-            return []
+            raise _TransientError(
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
 
-        elapsed_ms = (time.monotonic() - start) * 1000
-        response = getattr(ans, "response", None)
-        if response is not None:
+        if resp.flags & dns.flags.TC:
             try:
-                rcode_name = dns.rcode.to_text(response.rcode())
-            except Exception:  # noqa: BLE001
-                rcode_name = "?"
-            if response.flags & dns.flags.TC:
+                resp = await dns.asyncquery.tcp(
+                    q, ns_ip, timeout=timeout, port=53
+                )
                 protocol = "UDP+TCP"
-        else:
-            rcode_name = "?"
+            except (dns.exception.Timeout, OSError, dns.exception.DNSException) as exc:
+                elapsed = (time.monotonic() - start) * 1000
+                query_log.warning(
+                    "recv: server=%s:53 ns=%s role=%s name=%s type=%s "
+                    "TCP-fallback FAILED %s=%s elapsed_ms=%.1f",
+                    ns_ip, ns_hostname, role, name, rrtype,
+                    type(exc).__name__, exc, elapsed,
+                )
+                raise _TransientError(
+                    f"tcp: {type(exc).__name__}: {exc}"
+                ) from exc
 
-        rrset = ans.rrset
-        answers = list(rrset) if rrset is not None else []
-        query_log.info(
-            "recv: server=%s:%s protocol=%s role=%s name=%s type=%s "
-            "rcode=%s answers=%d elapsed_ms=%.1f",
-            server, port, protocol, role, name, rrtype,
-            rcode_name, len(answers), elapsed_ms,
-        )
-        for r in answers:
-            query_log.debug(
-                "answer: server=%s:%s name=%s type=%s rdata=%s",
-                server, port, name, rrtype, r,
+        elapsed = (time.monotonic() - start) * 1000
+        rcode_value = resp.rcode()
+        rcode_text = dns.rcode.to_text(rcode_value)
+
+        if rcode_value in (dns.rcode.SERVFAIL, dns.rcode.REFUSED):
+            query_log.warning(
+                "recv: server=%s:53 ns=%s protocol=%s role=%s name=%s type=%s "
+                "rcode=%s RETRY_NEXT_NS elapsed_ms=%.1f",
+                ns_ip, ns_hostname, protocol, role, name, rrtype,
+                rcode_text, elapsed,
             )
-        return sorted(str(r) for r in answers)
+            raise _TransientError(f"rcode={rcode_text}")
+
+        # Parse every rrset in the answer section so RRSIGs included
+        # via DO=1 are preserved alongside the primary rrset.
+        result: dict[str, list[str]] = {}
+        for rrset in resp.answer:
+            type_name = dns.rdatatype.to_text(rrset.rdtype)
+            result.setdefault(type_name, []).extend(str(r) for r in rrset)
+        for k in list(result):
+            result[k] = sorted(set(result[k]))
+
+        primary_count = len(result.get(rrtype, []))
+        query_log.info(
+            "recv: server=%s:53 ns=%s protocol=%s role=%s name=%s type=%s "
+            "rcode=%s answers=%d elapsed_ms=%.1f",
+            ns_ip, ns_hostname, protocol, role, name, rrtype,
+            rcode_text, primary_count, elapsed,
+        )
+        for tname, records in result.items():
+            for r in records:
+                query_log.debug(
+                    "answer: server=%s:53 ns=%s name=%s type=%s rdata=%s",
+                    ns_ip, ns_hostname, name, tname, r,
+                )
+        return result
 
     def _emit_diff(
         self,
@@ -319,6 +507,29 @@ class DnsProbeCollector(Collector):
                     detail={"rrtype": "SOA", "parent": parent},
                 )
             )
+
+
+def _parent_zone(zone: str) -> str | None:
+    """Derive the parent zone by stripping the leading label.
+
+    Returns ``None`` for the root zone itself (no parent above root).
+
+    >>> _parent_zone("fus3d.net")
+    'net'
+    >>> _parent_zone("sub.example.com")
+    'example.com'
+    >>> _parent_zone("net")
+    '.'
+    >>> _parent_zone(".") is None
+    True
+    """
+
+    name = zone.rstrip(".")
+    if not name or name == ".":
+        return None
+    if "." not in name:
+        return "."
+    return name.split(".", 1)[1]
 
 
 def _extract_key_tag(rrtype: str, rdata_text: str) -> int | None:
