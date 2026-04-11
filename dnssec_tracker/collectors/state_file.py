@@ -7,6 +7,8 @@ and emits events for added keys, removed keys, and per-field changes.
 
 from __future__ import annotations
 
+import logging
+
 from ..db import Database
 from ..models import Event, Key, Zone, now_iso
 from ..parsers.bind_state import (
@@ -19,6 +21,8 @@ from ..parsers.bind_state import (
 from .base import Collector
 
 
+log = logging.getLogger("dnssec_tracker.collector.state_file")
+
 TRACKED_FIELDS = STATE_FIELDS + TIMESTAMP_FIELDS
 
 
@@ -26,11 +30,25 @@ class StateFileCollector(Collector):
     name = "state_file"
     interval = 30.0
 
+    def __init__(self, config, db):
+        super().__init__(config, db)
+        self._logged_discovery = False
+
     def _key_scope(self, sf: StateFile) -> str:
         return f"{sf.zone}#{sf.key_tag}#{sf.role}"
 
     async def sample(self) -> None:
         files = scan_state_files(self.config.key_dir)
+        if not self._logged_discovery:
+            zones_found = sorted({sf.zone for sf in files})
+            log.info(
+                "state_file first scan of %s (recursive): %d file(s) across %d zone(s): %s",
+                self.config.key_dir,
+                len(files),
+                len(zones_found),
+                ", ".join(zones_found) if zones_found else "(none)",
+            )
+            self._logged_discovery = True
         seen_scopes: set[str] = set()
 
         for sf in files:

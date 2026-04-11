@@ -19,7 +19,10 @@ services:
     image: dnssec-tracker:latest
     container_name: dnssec-tracker
     network_mode: host     # simplest way to reach rndc + DNS on the host
-    user: "5000:5000"
+    # UID/GID 53:53 matches the BIND user on the host so the read-only
+    # mounts (key directory, named.log, rndc.key) are readable and the
+    # events volume is writable without any permission juggling.
+    user: "53:53"
     volumes:
       # BIND key directory
       - /etc/bind/keys:/mnt/bind/keys:ro

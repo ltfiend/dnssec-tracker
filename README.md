@@ -16,8 +16,8 @@ BIND configuration. Pair it with whatever tool is actually managing keys
 
 | Source       | How                                               |
 | ------------ | ------------------------------------------------- |
-| Key directory `K*.state` files | Polled every 30 s; every field change emitted as an event |
-| Key directory `K*.key` files   | Polled every 30 s; timing comments parsed          |
+| Key directory `K*.state` files | Polled every 30 s. The configured `key_dir` is walked **recursively** (`Path.rglob`) so the usual BIND layout of `<key_dir>/<zonename>/K*.state` is picked up, as are flat and deeper-nested layouts. |
+| Key directory `K*.key` files   | Polled every 30 s, also recursively; timing comments parsed |
 | syslog       | Tailed; iodyn-dnssec and named lines parsed       |
 | named.log    | Tailed; `dnssec` category lines parsed            |
 | Live DNS     | DNSKEY/RRSIG/CDS/CDNSKEY queried at the zone every 60 s, DS queried at the parent every 300 s |

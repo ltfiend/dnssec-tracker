@@ -3,9 +3,12 @@
 ; Style mirrors iodyn-dnssec.conf so the two tools feel familiar side by side.
 
 [paths]
-; Root of BIND's key-directory tree. Tracker walks this looking for K*.key
-; and K*.state files. Zones are auto-discovered — any subdirectory or
-; flat layout is fine.
+; Root of BIND's key-directory tree. Tracker walks this recursively
+; (Path.rglob) looking for K*.key and K*.state files at any depth. The
+; common BIND layout is one subdirectory per zone —
+; /mnt/bind/keys/<zonename>/K<zonename>.+<algo>+<tag>.{key,state} — and
+; that works as-is. Flat layouts and deeper nested layouts also work.
+; Zones are auto-discovered from whatever filenames are found.
 key_dir      = /mnt/bind/keys
 
 ; Host syslog file (mount read-only). The syslog collector tails it for

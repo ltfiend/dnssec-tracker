@@ -4,3 +4,15 @@ I need to build a new tool.  Part of my job is understanding how dnssec keys are
 
 ---
 
+## 2026-04-11 06:25:59
+
+Adjust the docker to use user 53:53 so that it will have the same permissions as the keys on the host system.  also make sure the key directory searches recursively below it key files are in /mnt/bind/keys/<zonename>/<file>.key.  I haven't been able to test but the documentation implies it's looking for the keys only in the root.
+
+---
+
+## 2026-04-11 06:27:47
+
+misclick, continue
+
+---
+

@@ -20,9 +20,16 @@ RUN apt-get update \
         tini \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd --system --uid 5000 --home /var/lib/dnssec-tracker --shell /usr/sbin/nologin tracker \
+# Run as UID/GID 53:53 so the container process has the same identity
+# as BIND on the host. The read-only mounts of the key directory,
+# named.log, and rndc.key are owned by that UID/GID on Peter's hosts,
+# and writing to the events database volume must happen as 53:53 too.
+# The numeric IDs are what actually matter — the name is "bind" purely
+# for readability of `ps` output inside the container.
+RUN groupadd --gid 53 bind \
+    && useradd --uid 53 --gid 53 --no-create-home --shell /usr/sbin/nologin bind \
     && mkdir -p /var/lib/dnssec-tracker /etc/dnssec-tracker \
-    && chown -R tracker:tracker /var/lib/dnssec-tracker
+    && chown -R 53:53 /var/lib/dnssec-tracker
 
 WORKDIR /opt/dnssec-tracker
 COPY pyproject.toml README.md ./
@@ -31,7 +38,7 @@ COPY config ./config
 
 RUN pip install --no-cache-dir .
 
-USER tracker
+USER bind
 EXPOSE 8080
 VOLUME ["/var/lib/dnssec-tracker"]
 
