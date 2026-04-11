@@ -67,6 +67,23 @@
     </table>
   </section>
 
+  {% if rollover_svg %}
+  <section>
+    <h2>Rollover view</h2>
+    <p class="note">
+      Every observed key on a time axis, grouped by
+      <code>(role, algorithm)</code>, with phase-coloured bars
+      (pre-publication / published / active / retired / removed). A
+      thin DS overlay stripe above each KSK row shows when the
+      parent-side chain of trust was actually complete, which is
+      often when the interesting DNSSEC stories happen. If two
+      algorithms are simultaneously active, the overlap region is
+      highlighted behind their bars.
+    </p>
+    <div class="timeline rollover-view">{{ rollover_svg|safe }}</div>
+  </section>
+  {% endif %}
+
   <section>
     <h2>Calendar view</h2>
     <p class="note">

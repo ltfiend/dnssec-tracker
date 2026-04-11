@@ -69,6 +69,18 @@
 <p><em>No keys observed yet for this zone.</em></p>
 {% endif %}
 
+{% if rollover_svg %}
+<h3>Rollover view</h3>
+<p class="meta">
+  Every observed key on a time axis, grouped by <code>(role, algorithm)</code>,
+  subdivided into <em>pre-publication / published / active / retired / removed</em>
+  phases. KSK rows carry a thin DS-at-parent overlay stripe showing exactly when
+  the chain of trust was complete. Simultaneous active phases across two
+  algorithms are highlighted to make algorithm rollovers pop at a glance.
+</p>
+<div class="timeline rollover-view">{{ rollover_svg|safe }}</div>
+{% endif %}
+
 {% if calendar_html %}
 <h3>Calendar view</h3>
 {{ calendar_html|safe }}

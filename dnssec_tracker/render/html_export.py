@@ -18,6 +18,7 @@ from .calendar import render_calendar
 from .channels import dns_channel, file_channel
 from .event_timeline import render_event_timeline
 from .filtering import FilterSet, filter_events
+from .rollover_view import render_rollover_view
 from .templating import create_env
 from .timeline_svg import render_rndc_timeline, render_state_timeline
 
@@ -79,6 +80,18 @@ def _build_report_context(
     file_timeline_svg = render_event_timeline(
         file_channel(events), from_ts, to_ts
     )
+    # Rollover view: the whole story of this zone's keys on a time
+    # axis, grouped by (role, algorithm). Pulls phase boundaries from
+    # each key's state_file snapshot so the report captures the exact
+    # Published/Active/Retired/Removed timestamps at render time.
+    rollover_snapshots = {
+        f"{zone}#{k.key_tag}#{k.role}":
+            db.get_snapshot("state_file", f"{zone}#{k.key_tag}#{k.role}") or {}
+        for k in keys
+    }
+    rollover_svg = render_rollover_view(
+        events, keys, rollover_snapshots, from_ts=from_ts, to_ts=to_ts
+    )
 
     # Per-key current timing snapshots (Created/Publish/Activate/…
     # from K*.key plus the state-machine and timestamp fields from
@@ -126,6 +139,7 @@ def _build_report_context(
         "calendar_html": calendar_html,
         "dns_timeline_svg": dns_timeline_svg,
         "file_timeline_svg": file_timeline_svg,
+        "rollover_svg": rollover_svg,
         "per_key_blocks": per_key_blocks,
         "dns_observations": dns_observations,
         "state_snapshots": state_snapshots,

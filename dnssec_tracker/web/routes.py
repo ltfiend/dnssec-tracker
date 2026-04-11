@@ -19,6 +19,7 @@ from ..render.event_timeline import render_event_timeline
 from ..render.filtering import FilterSet, filter_events
 from ..render.html_export import render_report_html
 from ..render.pdf_export import render_report_pdf
+from ..render.rollover_view import render_rollover_view
 from ..render.templating import create_env
 from ..render.timeline_svg import render_state_timeline
 
@@ -85,6 +86,17 @@ def build_router(db: Database, config: Config) -> APIRouter:
         dns_timeline_svg = render_event_timeline(dns_channel(events))
         file_timeline_svg = render_event_timeline(file_channel(events))
         calendar_html = render_calendar(events)
+        # Rollover view — fetch each key's state_file snapshot so the
+        # renderer can pull phase boundaries from BIND's Published/
+        # Active/Retired/Removed timestamps. Snapshots are keyed by
+        # "zone#tag#role" (the role comes from the Key object so CSKs
+        # look up under "#CSK").
+        snapshots = {
+            f"{k.zone}#{k.key_tag}#{k.role}":
+                db.get_snapshot("state_file", f"{k.zone}#{k.key_tag}#{k.role}") or {}
+            for k in keys
+        }
+        rollover_svg = render_rollover_view(events, keys, snapshots)
         return render(
             "zone.html",
             zone=z,
@@ -94,6 +106,7 @@ def build_router(db: Database, config: Config) -> APIRouter:
             calendar_html=calendar_html,
             dns_timeline_svg=dns_timeline_svg,
             file_timeline_svg=file_timeline_svg,
+            rollover_svg=rollover_svg,
             filterset=fs,
             hide_types=hide_types or "",
             hide_sources=hide_sources or "",
@@ -158,6 +171,17 @@ def build_router(db: Database, config: Config) -> APIRouter:
         calendar_html = render_calendar(events)
         dns_timeline_svg = render_event_timeline(dns_channel(events))
         file_timeline_svg = render_event_timeline(file_channel(events))
+        # Rollover view scoped to just this key tag. Reuse the same
+        # snapshots dict shape the renderer expects — one entry per
+        # (role) instance of this tag (there may be more than one if
+        # the zone is mid-rollover with a KSK + ZSK sharing a tag, or
+        # if CSK/ZSK overlap).
+        snapshots = {
+            f"{k.zone}#{k.key_tag}#{k.role}":
+                db.get_snapshot("state_file", f"{k.zone}#{k.key_tag}#{k.role}") or {}
+            for k in keys
+        }
+        rollover_svg = render_rollover_view(events, keys, snapshots)
 
         return render(
             "key.html",
@@ -169,6 +193,7 @@ def build_router(db: Database, config: Config) -> APIRouter:
             calendar_html=calendar_html,
             dns_timeline_svg=dns_timeline_svg,
             file_timeline_svg=file_timeline_svg,
+            rollover_svg=rollover_svg,
             filterset=fs,
             hide_types=hide_types or "",
             hide_sources=hide_sources or "",

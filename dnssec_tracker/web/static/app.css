@@ -410,6 +410,17 @@ table th { background: var(--surface-alt); font-weight: 600; }
   padding: 0.3rem;
 }
 
+/* ---- Rollover view ------------------------------------------------ */
+.rollover-view {
+  color: var(--fg);
+}
+.rollover-view svg {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+}
+
 /* ---- Per-key timings grid -------------------------------------- */
 .key-block { margin-top: 1.6rem; }
 .timings-grid {

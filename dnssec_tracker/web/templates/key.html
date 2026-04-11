@@ -118,6 +118,17 @@
 </table>
 {% endif %}
 
+{% if rollover_svg %}
+<h3>Rollover view</h3>
+<p class="meta">
+  This key's lifecycle on a time axis with phase colouring. For KSKs
+  the DS-at-parent overlay stripe shows when the parent-side chain of
+  trust was actually complete, independently of BIND's internal state
+  machine.
+</p>
+<div class="timeline rollover-view">{{ rollover_svg|safe }}</div>
+{% endif %}
+
 {% if calendar_html %}
 <h3>Calendar view</h3>
 {{ calendar_html|safe }}
