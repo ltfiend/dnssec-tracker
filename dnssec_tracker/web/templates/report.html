@@ -62,6 +62,28 @@
   </section>
 
   <section>
+    <h2>Calendar view</h2>
+    <p class="note">
+      Monthly calendars covering the reported window. Each day is
+      shaded by the number of events observed and carries a coloured
+      dot for every event source that fired that day. Hover any day
+      for the count and a sample of the events (live UI only).
+    </p>
+    {{ calendar_html|safe }}
+  </section>
+
+  <section>
+    <h2>Event timeline chart</h2>
+    <p class="note">
+      Every event plotted on a single horizontal axis. Dots are
+      coloured by source and stacked to avoid overlap; major events
+      (key state transitions, rndc status changes, iodyn actions,
+      DNS&nbsp;DS changes) are labelled inline.
+    </p>
+    <div class="timeline">{{ event_timeline_svg|safe }}</div>
+  </section>
+
+  <section>
     <h2>State machine timeline</h2>
     <p class="note">
       Colour bars show each key's state-machine value over the window.

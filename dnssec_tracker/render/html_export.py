@@ -16,6 +16,8 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from ..config import Config
 from ..db import Database
 from ..models import Event, now_iso
+from .calendar import render_calendar
+from .event_timeline import render_event_timeline
 from .timeline_svg import render_rndc_timeline, render_state_timeline
 
 
@@ -72,6 +74,8 @@ def _build_report_context(
 
     timeline_svg = render_state_timeline(events, keys)
     rndc_svg = render_rndc_timeline(events, keys)
+    calendar_html = render_calendar(events, from_ts, to_ts)
+    event_timeline_svg = render_event_timeline(events, from_ts, to_ts)
 
     dns_observations = [e for e in events if e.source == "dns"]
 
@@ -106,6 +110,8 @@ def _build_report_context(
         "counts": counts,
         "timeline_svg": timeline_svg,
         "rndc_svg": rndc_svg,
+        "calendar_html": calendar_html,
+        "event_timeline_svg": event_timeline_svg,
         "dns_observations": dns_observations,
         "state_snapshots": state_snapshots,
         "window_start": from_ts,

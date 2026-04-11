@@ -11,6 +11,8 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..config import Config
 from ..db import Database
+from ..render.calendar import render_calendar
+from ..render.event_timeline import render_event_timeline
 from ..render.html_export import render_report_html
 from ..render.pdf_export import render_report_pdf
 from ..render.timeline_svg import render_state_timeline
@@ -48,12 +50,18 @@ def build_router(db: Database, config: Config) -> APIRouter:
         keys = db.list_keys(zone)
         events = db.query_events(zone=zone, limit=config.events_per_page)
         timeline_svg = render_state_timeline(events, keys)
+        # The calendar and event-line views are also useful on the live
+        # zone page, not just in exported reports.
+        calendar_html = render_calendar(events)
+        event_timeline_svg = render_event_timeline(events)
         return render(
             "zone.html",
             zone=z,
             keys=keys,
             events=events,
             timeline_svg=timeline_svg,
+            calendar_html=calendar_html,
+            event_timeline_svg=event_timeline_svg,
         )
 
     @router.get("/zones/{zone}/keys/{tag}", response_class=HTMLResponse)

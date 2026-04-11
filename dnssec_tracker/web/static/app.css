@@ -222,6 +222,109 @@ table th { background: var(--surface-alt); font-weight: 600; }
   padding: 0.6rem;
 }
 
+/* ---- Calendar view --------------------------------------------- */
+.calendar-view { color: var(--fg); }
+.cal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-bottom: 0.6rem;
+}
+.cal-legend-item { display: inline-flex; align-items: center; gap: 0.3rem; }
+.cal-dot {
+  display: inline-block;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.cal-dot.src-state  { background: var(--state); }
+.cal-dot.src-key    { background: var(--key); }
+.cal-dot.src-syslog { background: var(--syslog); }
+.cal-dot.src-dns    { background: var(--dns); }
+.cal-dot.src-named  { background: var(--named); }
+.cal-dot.src-rndc   { background: var(--rndc); }
+.cal-dot.cal-today-dot {
+  background: transparent;
+  border: 2px solid var(--accent);
+  width: 8px; height: 8px;
+}
+
+.cal-month {
+  width: auto;
+  display: inline-table;
+  margin: 0 1.2rem 1.2rem 0;
+  vertical-align: top;
+  table-layout: fixed;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.cal-month caption {
+  text-align: left;
+  font-weight: 600;
+  padding: 0.3rem 0.5rem;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+  caption-side: top;
+}
+.cal-month th {
+  width: 38px;
+  padding: 0.25rem 0;
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--muted);
+  background: var(--surface-alt);
+}
+.cal-month td.cal-cell {
+  width: 38px;
+  height: 44px;
+  padding: 2px 3px;
+  text-align: right;
+  vertical-align: top;
+  position: relative;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 0.78rem;
+}
+.cal-month td.cal-out {
+  color: var(--muted);
+  opacity: 0.4;
+  background: var(--bg);
+}
+.cal-month td.cal-today .cal-day {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+.cal-month td.has-events { cursor: help; }
+.cal-month td.count-s { background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+.cal-month td.count-m { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); }
+.cal-month td.count-l { background: color-mix(in srgb, var(--accent) 24%, var(--surface)); }
+.cal-month td.count-xl { background: color-mix(in srgb, var(--accent) 36%, var(--surface)); }
+.cal-dots {
+  display: flex;
+  gap: 2px;
+  justify-content: flex-start;
+  position: absolute;
+  left: 3px;
+  bottom: 2px;
+}
+.cal-dots .cal-dot { width: 6px; height: 6px; }
+
+/* ---- Event timeline chart -------------------------------------- */
+.event-timeline {
+  width: 100%;
+  max-width: 100%;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 0.3rem;
+}
+
 /* ---- Report (HTML + PDF export) --------------------------------
  *
  * Always use the light palette, no matter what the active UI theme is.

@@ -35,8 +35,18 @@
 <p><em>No keys observed yet for this zone.</em></p>
 {% endif %}
 
+{% if calendar_html %}
+<h3>Calendar view</h3>
+{{ calendar_html|safe }}
+{% endif %}
+
+{% if event_timeline_svg %}
+<h3>Event timeline</h3>
+<div class="timeline">{{ event_timeline_svg|safe }}</div>
+{% endif %}
+
 {% if timeline_svg %}
-<h3>State timeline</h3>
+<h3>State transition timeline</h3>
 <div class="timeline">{{ timeline_svg|safe }}</div>
 {% endif %}
 

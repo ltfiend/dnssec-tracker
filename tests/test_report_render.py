@@ -94,3 +94,8 @@ def test_render_report_html(tmp_path):
     # counts section
     assert "on-disk state transition" in html
     assert "rndc-reported state change" in html or "rndc-reported" in html
+    # new renderers must be included in the report
+    assert "Calendar view" in html
+    assert "cal-month" in html
+    assert "Event timeline chart" in html
+    assert "event-timeline" in html
