@@ -6,6 +6,7 @@ A single file holds zones, keys, events, and per-collector snapshots.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -13,6 +14,22 @@ from pathlib import Path
 from typing import Iterable, Iterator
 
 from .models import Event, Key, Zone, now_iso
+
+
+def _sqlite_regexp(pattern: str | None, value: str | None) -> bool:
+    """Python implementation of SQLite's ``REGEXP`` operator.
+
+    Registered as a scalar function on the connection so ``WHERE
+    zone REGEXP ?`` works for the events filter. Uses ``re.search``
+    so callers can pass substrings without anchors; bad patterns
+    gracefully return no match rather than blowing up the query.
+    """
+    if pattern is None or value is None:
+        return False
+    try:
+        return re.search(pattern, value) is not None
+    except re.error:
+        return False
 
 
 SCHEMA = """
@@ -72,6 +89,9 @@ class Database:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
+        # Register Python REGEXP so query_events can use `WHERE … REGEXP ?`
+        # for the zone/event_type/source filters on the events page.
+        self._conn.create_function("REGEXP", 2, _sqlite_regexp)
         with self._lock:
             self._conn.executescript(SCHEMA)
 
@@ -213,10 +233,16 @@ class Database:
         limit: int = 500,
         offset: int = 0,
     ) -> list[Event]:
+        # zone / event_type / source filters are regex patterns,
+        # matched via the REGEXP function registered on the connection.
+        # Pass an exact string and it still works (re.search treats
+        # plain strings as substrings); pass "^foo$" for exact match,
+        # or "foo|bar" for alternatives. Invalid patterns fall back to
+        # "no match" rather than raising.
         clauses = []
         args: list = []
         if zone:
-            clauses.append("zone = ?")
+            clauses.append("zone REGEXP ?")
             args.append(zone)
         if from_ts:
             clauses.append("ts >= ?")
@@ -225,10 +251,10 @@ class Database:
             clauses.append("ts <= ?")
             args.append(to_ts)
         if event_type:
-            clauses.append("event_type = ?")
+            clauses.append("event_type REGEXP ?")
             args.append(event_type)
         if source:
-            clauses.append("source = ?")
+            clauses.append("source REGEXP ?")
             args.append(source)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         q = f"SELECT * FROM events {where} ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?"

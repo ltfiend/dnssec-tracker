@@ -58,3 +58,9 @@ Let's change the behavior to query the authoriative name servers for the zones a
 
 ---
 
+## 2026-04-11 09:10:17
+
+Adjust the events page so that they filter fields support regex for zone,type and source.  make the date ranges into calendar selection dropdowns
+
+---
+

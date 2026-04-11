@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -19,6 +20,28 @@ from ..render.html_export import render_report_html
 from ..render.pdf_export import render_report_pdf
 from ..render.templating import create_env
 from ..render.timeline_svg import render_state_timeline
+
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _expand_date(value: str | None, *, end: bool) -> str | None:
+    """Turn a ``YYYY-MM-DD`` from the HTML5 date picker into a full
+    ISO-8601 UTC timestamp that the SQLite ``ts`` column (also ISO) can
+    range-compare against.
+
+    * ``end=False`` stretches to the start of the day (``T00:00:00Z``)
+    * ``end=True`` stretches to the last second of the day (``T23:59:59Z``)
+
+    Values that don't match the date shape are passed through
+    unchanged so existing ISO timestamps keep working.
+    """
+
+    if not value:
+        return value
+    if _DATE_RE.match(value):
+        return f"{value}T23:59:59Z" if end else f"{value}T00:00:00Z"
+    return value
 
 
 def build_router(db: Database, config: Config) -> APIRouter:
@@ -129,8 +152,12 @@ def build_router(db: Database, config: Config) -> APIRouter:
         offset = (page - 1) * config.events_per_page
         events = db.query_events(
             zone=zone,
-            from_ts=from_ts,
-            to_ts=to_ts,
+            # HTML5 <input type="date"> sends YYYY-MM-DD; widen those
+            # to full-day UTC bounds so "from 2026-04-10" really means
+            # "from 00:00:00 UTC" and "to 2026-04-11" means "up to
+            # 23:59:59 UTC".
+            from_ts=_expand_date(from_ts, end=False),
+            to_ts=_expand_date(to_ts, end=True),
             event_type=event_type,
             source=source,
             limit=config.events_per_page,

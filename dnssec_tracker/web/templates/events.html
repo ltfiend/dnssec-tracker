@@ -4,13 +4,40 @@
 {% block content %}
 <h2>Events</h2>
 <form method="get" class="filters">
-  <label>Zone <input name="zone" value="{{ zone or '' }}"></label>
-  <label>Type <input name="event_type" value="{{ event_type or '' }}"></label>
-  <label>Source <input name="source" value="{{ source or '' }}"></label>
-  <label>From <input name="from" value="{{ from_ts or '' }}" placeholder="YYYY-MM-DDTHH:MM:SSZ"></label>
-  <label>To <input name="to" value="{{ to_ts or '' }}" placeholder="YYYY-MM-DDTHH:MM:SSZ"></label>
+  <label>
+    Zone
+    <input name="zone" value="{{ zone or '' }}" placeholder="regex, e.g. example\.com">
+    <span class="hint">regex</span>
+  </label>
+  <label>
+    Type
+    <input name="event_type" value="{{ event_type or '' }}" placeholder="regex, e.g. ^dns_ds_">
+    <span class="hint">regex</span>
+  </label>
+  <label>
+    Source
+    <input name="source" value="{{ source or '' }}" placeholder="regex, e.g. dns|rndc">
+    <span class="hint">regex</span>
+  </label>
+  <label>
+    From
+    <input type="date" name="from" value="{{ (from_ts or '')[:10] }}">
+  </label>
+  <label>
+    To
+    <input type="date" name="to" value="{{ (to_ts or '')[:10] }}">
+  </label>
   <button type="submit">Filter</button>
+  <a class="clear" href="/events">Clear</a>
 </form>
+
+<p class="meta filter-note">
+  Zone, type, and source are matched with <code>re.search</code> —
+  substrings work without anchors, and you can use the usual regex
+  syntax (<code>^</code>, <code>$</code>, <code>|</code>,
+  character classes, etc.). Invalid patterns match nothing rather
+  than erroring.
+</p>
 
 {% if events %}
 <table class="events">
@@ -30,7 +57,7 @@
     {% endfor %}
   </tbody>
 </table>
-<p>Page {{ page }} · <a href="?page={{ page + 1 }}{% if zone %}&zone={{ zone }}{% endif %}">next &rarr;</a></p>
+<p>Page {{ page }} · <a href="?page={{ page + 1 }}{% if zone %}&zone={{ zone }}{% endif %}{% if event_type %}&event_type={{ event_type }}{% endif %}{% if source %}&source={{ source }}{% endif %}{% if from_ts %}&from={{ from_ts[:10] }}{% endif %}{% if to_ts %}&to={{ to_ts[:10] }}{% endif %}">next &rarr;</a></p>
 {% else %}
 <p><em>No events match.</em></p>
 {% endif %}
