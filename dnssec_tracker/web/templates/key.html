@@ -1,19 +1,112 @@
 {% extends "layout.html" %}
-{% block title %}{{ zone }} key {{ keys[0].key_tag }} — dnssec-tracker{% endblock %}
+{% block title %}{{ zone }} key {{ tag }} — dnssec-tracker{% endblock %}
 
 {% block content %}
-<h2>{{ zone }} — key {{ keys[0].key_tag }}</h2>
-{% for k in keys %}
-<p class="meta">
-  Role: <strong>{{ k.role }}</strong><br>
-  Algorithm: {{ k.algorithm }}<br>
-  Key id: <code>{{ k.key_id }}</code><br>
-  First seen: <span class="ts">{{ k.first_seen }}</span>
-</p>
-{% endfor %}
+<h2>{{ zone }} — key {{ tag }}</h2>
 <p><a href="/zones/{{ zone }}">&larr; back to zone</a></p>
 
-<h3>Events for this key</h3>
+{% for block in key_blocks %}
+{% set k = block.key %}
+<section class="key-block">
+  <h3>{{ k.role }} · tag {{ k.key_tag }}</h3>
+  <p class="meta">
+    Algorithm: {{ k.algorithm }}<br>
+    Key id: <code>{{ k.key_id }}</code><br>
+    First seen: <span class="ts">{{ k.first_seen }}</span>
+  </p>
+
+  <div class="timings-grid">
+    <table class="timings">
+      <caption>K*.key file timings</caption>
+      <thead><tr><th>Field</th><th>Value</th></tr></thead>
+      <tbody>
+        {% for field in ["Created", "Publish", "Activate", "Revoke", "Inactive", "Delete", "SyncPublish", "SyncDelete"] %}
+        <tr>
+          <td>{{ field }}</td>
+          <td>{{ block.key_file_timings.get(field, '')|bind_ts }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <table class="timings">
+      <caption>K*.state file — state machine</caption>
+      <thead><tr><th>Field</th><th>Value</th></tr></thead>
+      <tbody>
+        {% if block.state_machine %}
+          {% for field, value in block.state_machine.items() %}
+          <tr><td>{{ field }}</td><td>{{ value }}</td></tr>
+          {% endfor %}
+        {% else %}
+          <tr><td colspan="2"><em>no state file observed yet</em></td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+
+    <table class="timings">
+      <caption>K*.state file — timestamps</caption>
+      <thead><tr><th>Field</th><th>Value</th></tr></thead>
+      <tbody>
+        {% if block.state_timestamps %}
+          {% for field, value in block.state_timestamps.items() %}
+          <tr><td>{{ field }}</td><td>{{ value|bind_ts }}</td></tr>
+          {% endfor %}
+        {% else %}
+          <tr><td colspan="2"><em>no state file observed yet</em></td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endfor %}
+
+{% if timing_change_events %}
+<h3>Timing changes observed</h3>
+<p class="meta">
+  Every time a value in a <code>K*.key</code> or <code>K*.state</code>
+  file moved — whether from <code>dnssec-settime</code>, iodyn-dnssec,
+  or BIND's own state machine.
+</p>
+<table class="events">
+  <thead>
+    <tr><th>When</th><th>Source</th><th>Field</th><th>Old</th><th>New</th></tr>
+  </thead>
+  <tbody>
+    {% for e in timing_change_events %}
+    <tr class="src-{{ e.source }}">
+      <td class="ts">{{ e.ts }}</td>
+      <td><span class="badge">{{ e.source }}</span></td>
+      <td>{{ e.detail.get('field', '') }}</td>
+      <td>{{ e.detail.get('old', '')|bind_ts }}</td>
+      <td>{{ e.detail.get('new', '')|bind_ts }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if calendar_html %}
+<h3>Calendar view</h3>
+{{ calendar_html|safe }}
+{% endif %}
+
+{% if dns_timeline_svg %}
+<h3>DNS event timeline</h3>
+<p class="meta">
+  Live DNS observations and <code>rndc dnssec&nbsp;-status</code>
+  reports for this key. For KSKs this includes the DS lifecycle at
+  the parent zone (captured by key tag from the DS rdata).
+</p>
+<div class="timeline">{{ dns_timeline_svg|safe }}</div>
+{% endif %}
+
+{% if file_timeline_svg %}
+<h3>File event timeline</h3>
+<p class="meta">On-disk changes to this key's <code>K*.state</code> / <code>K*.key</code> files.</p>
+<div class="timeline">{{ file_timeline_svg|safe }}</div>
+{% endif %}
+
+<h3>All events for this key</h3>
 {% if events %}
 <table class="events">
   <thead>

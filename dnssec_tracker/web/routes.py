@@ -3,34 +3,25 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
-from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..config import Config
 from ..db import Database
+from ..parsers.bind_state import STATE_FIELDS, TIMESTAMP_FIELDS
 from ..render.calendar import render_calendar
+from ..render.channels import dns_channel, file_channel
 from ..render.event_timeline import render_event_timeline
 from ..render.html_export import render_report_html
 from ..render.pdf_export import render_report_pdf
+from ..render.templating import create_env
 from ..render.timeline_svg import render_state_timeline
-
-
-def _jinja_env() -> Environment:
-    tmpl_dir = Path(__file__).parent / "templates"
-    env = Environment(
-        loader=FileSystemLoader(str(tmpl_dir)),
-        autoescape=select_autoescape(["html", "xml"]),
-    )
-    env.filters["fromjson"] = lambda s: json.loads(s or "{}")
-    return env
 
 
 def build_router(db: Database, config: Config) -> APIRouter:
     router = APIRouter()
-    env = _jinja_env()
+    env = create_env()
 
     def render(name: str, **ctx) -> HTMLResponse:
         tmpl = env.get_template(name)
@@ -50,10 +41,11 @@ def build_router(db: Database, config: Config) -> APIRouter:
         keys = db.list_keys(zone)
         events = db.query_events(zone=zone, limit=config.events_per_page)
         timeline_svg = render_state_timeline(events, keys)
-        # The calendar and event-line views are also useful on the live
-        # zone page, not just in exported reports.
+        # Split the chronological event chart into two channels:
+        # DNS (dns_probe + rndc_status) and File (state_file + key_file).
+        dns_timeline_svg = render_event_timeline(dns_channel(events))
+        file_timeline_svg = render_event_timeline(file_channel(events))
         calendar_html = render_calendar(events)
-        event_timeline_svg = render_event_timeline(events)
         return render(
             "zone.html",
             zone=z,
@@ -61,7 +53,8 @@ def build_router(db: Database, config: Config) -> APIRouter:
             events=events,
             timeline_svg=timeline_svg,
             calendar_html=calendar_html,
-            event_timeline_svg=event_timeline_svg,
+            dns_timeline_svg=dns_timeline_svg,
+            file_timeline_svg=file_timeline_svg,
         )
 
     @router.get("/zones/{zone}/keys/{tag}", response_class=HTMLResponse)
@@ -69,10 +62,57 @@ def build_router(db: Database, config: Config) -> APIRouter:
         keys = [k for k in db.list_keys(zone) if k.key_tag == tag]
         if not keys:
             raise HTTPException(404, f"key {tag} not found in {zone}")
+
+        # Pull live timing snapshots for every (role) instance of this
+        # tag. Each collector stores them keyed by
+        # "zone#tag#role" so we query directly.
+        key_blocks = []
+        for k in keys:
+            scope = f"{k.zone}#{k.key_tag}#{k.role}"
+            key_file_snap = db.get_snapshot("key_file", scope) or {}
+            state_file_snap = db.get_snapshot("state_file", scope) or {}
+            state_fields = state_file_snap.get("fields", {}) or {}
+            key_blocks.append(
+                {
+                    "key": k,
+                    "key_file_timings": key_file_snap.get("timings", {}) or {},
+                    "state_machine": {
+                        f: state_fields[f] for f in STATE_FIELDS if f in state_fields
+                    },
+                    "state_timestamps": {
+                        f: state_fields[f] for f in TIMESTAMP_FIELDS if f in state_fields
+                    },
+                }
+            )
+
+        # Events for this key. DS events land in here naturally because
+        # _extract_key_tag pulls the tag from DS rdata at emit time,
+        # so KSKs see the "DS (key tag N) appeared at parent" story
+        # without any special plumbing.
         events = [
-            e for e in db.query_events(zone=zone, limit=1000) if e.key_tag == tag
+            e for e in db.query_events(zone=zone, limit=2000)
+            if e.key_tag == tag
         ]
-        return render("key.html", zone=zone, keys=keys, events=events)
+        timing_change_events = [
+            e for e in events
+            if e.event_type in ("key_timing_changed", "state_timing_changed")
+        ]
+
+        calendar_html = render_calendar(events)
+        dns_timeline_svg = render_event_timeline(dns_channel(events))
+        file_timeline_svg = render_event_timeline(file_channel(events))
+
+        return render(
+            "key.html",
+            zone=zone,
+            tag=tag,
+            key_blocks=key_blocks,
+            events=events,
+            timing_change_events=timing_change_events,
+            calendar_html=calendar_html,
+            dns_timeline_svg=dns_timeline_svg,
+            file_timeline_svg=file_timeline_svg,
+        )
 
     @router.get("/events", response_class=HTMLResponse)
     def events_page(

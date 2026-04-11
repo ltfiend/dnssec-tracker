@@ -325,6 +325,31 @@ table th { background: var(--surface-alt); font-weight: 600; }
   padding: 0.3rem;
 }
 
+/* ---- Per-key timings grid -------------------------------------- */
+.key-block { margin-top: 1.6rem; }
+.timings-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 0.6rem 0 1.2rem;
+}
+.timings {
+  width: auto;
+  min-width: 260px;
+  flex: 0 1 auto;
+}
+.timings caption {
+  caption-side: top;
+  text-align: left;
+  font-weight: 600;
+  padding: 0.3rem 0.5rem;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+}
+.timings th { font-size: 0.78rem; }
+.timings td { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 0.78rem; }
+
 /* ---- Report (HTML + PDF export) --------------------------------
  *
  * Always use the light palette, no matter what the active UI theme is.

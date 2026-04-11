@@ -11,22 +11,14 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-
 from ..config import Config
 from ..db import Database
 from ..models import Event, now_iso
 from .calendar import render_calendar
+from .channels import dns_channel, file_channel
 from .event_timeline import render_event_timeline
+from .templating import create_env
 from .timeline_svg import render_rndc_timeline, render_state_timeline
-
-
-def _env() -> Environment:
-    tmpl_dir = Path(__file__).parent.parent / "web" / "templates"
-    return Environment(
-        loader=FileSystemLoader(str(tmpl_dir)),
-        autoescape=select_autoescape(["html"]),
-    )
 
 
 def _load_css() -> str:
@@ -75,7 +67,20 @@ def _build_report_context(
     timeline_svg = render_state_timeline(events, keys)
     rndc_svg = render_rndc_timeline(events, keys)
     calendar_html = render_calendar(events, from_ts, to_ts)
-    event_timeline_svg = render_event_timeline(events, from_ts, to_ts)
+    dns_timeline_svg = render_event_timeline(
+        dns_channel(events), from_ts, to_ts
+    )
+    file_timeline_svg = render_event_timeline(
+        file_channel(events), from_ts, to_ts
+    )
+
+    # Per-key current timing snapshots (Created/Publish/Activate/…
+    # from K*.key plus the state-machine and timestamp fields from
+    # K*.state) pulled live from the collector snapshots so the report
+    # captures the exact values at render time. Events for each key
+    # are also grouped so the report can show the per-key timeline
+    # alongside the zone-wide one.
+    per_key_blocks = _build_per_key_blocks(db, keys, events)
 
     dns_observations = [e for e in events if e.source == "dns"]
 
@@ -111,7 +116,9 @@ def _build_report_context(
         "timeline_svg": timeline_svg,
         "rndc_svg": rndc_svg,
         "calendar_html": calendar_html,
-        "event_timeline_svg": event_timeline_svg,
+        "dns_timeline_svg": dns_timeline_svg,
+        "file_timeline_svg": file_timeline_svg,
+        "per_key_blocks": per_key_blocks,
         "dns_observations": dns_observations,
         "state_snapshots": state_snapshots,
         "window_start": from_ts,
@@ -123,6 +130,58 @@ def _build_report_context(
     }
 
 
+def _build_per_key_blocks(
+    db: Database,
+    keys,
+    events: list[Event],
+) -> list[dict]:
+    """For each key, gather its current timing snapshots and the
+    events filtered down to that key (matched by ``key_tag``).
+    """
+
+    blocks: list[dict] = []
+    for k in keys:
+        scope = f"{k.zone}#{k.key_tag}#{k.role}"
+        key_file_snap = db.get_snapshot("key_file", scope) or {}
+        state_file_snap = db.get_snapshot("state_file", scope) or {}
+
+        state_fields_all = state_file_snap.get("fields", {}) or {}
+        # Split the .state fields into state-machine names vs timestamps
+        # so the report shows two focused tables rather than one big
+        # mess.
+        from ..parsers.bind_state import STATE_FIELDS, TIMESTAMP_FIELDS
+
+        state_machine = {
+            k_: state_fields_all.get(k_) for k_ in STATE_FIELDS if k_ in state_fields_all
+        }
+        state_timestamps = {
+            k_: state_fields_all.get(k_) for k_ in TIMESTAMP_FIELDS if k_ in state_fields_all
+        }
+
+        key_events = [e for e in events if e.key_tag == k.key_tag]
+        # Only timing-change events (for the "changes observed"
+        # subsection in the template).
+        timing_changes = [
+            e for e in key_events
+            if e.event_type in ("key_timing_changed", "state_timing_changed")
+        ]
+
+        blocks.append(
+            {
+                "key": k,
+                "key_file_timings": key_file_snap.get("timings", {}) or {},
+                "state_machine": state_machine,
+                "state_timestamps": state_timestamps,
+                "events": key_events,
+                "timing_changes": timing_changes,
+                "dns_timeline_svg": render_event_timeline(dns_channel(key_events)),
+                "file_timeline_svg": render_event_timeline(file_channel(key_events)),
+                "calendar_html": render_calendar(key_events),
+            }
+        )
+    return blocks
+
+
 def render_report_html(
     db: Database,
     config: Config,
@@ -131,6 +190,6 @@ def render_report_html(
     to_ts: str | None = None,
 ) -> str:
     ctx = _build_report_context(db, config, zone, from_ts, to_ts)
-    env = _env()
+    env = create_env()
     tmpl = env.get_template("report.html")
     return tmpl.render(**ctx)

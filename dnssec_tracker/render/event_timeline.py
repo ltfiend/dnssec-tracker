@@ -168,10 +168,15 @@ def render_event_timeline(
                 f'{escape(label)}</text>'
             )
 
-    # Legend
+    # Legend — only show sources that actually appear in this slice
+    # of events so the split DNS / File timelines don't carry
+    # irrelevant legend entries.
+    present_sources = {e.source for e in evs}
     legend_y = height - 20
     lx = margin_left
     for src, colour in SOURCE_COLOR_VAR.items():
+        if src not in present_sources:
+            continue
         parts.append(
             f'<circle cx="{lx + 4}" cy="{legend_y - 3}" r="4" fill="{colour}"/>'
         )

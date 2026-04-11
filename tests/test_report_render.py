@@ -97,5 +97,10 @@ def test_render_report_html(tmp_path):
     # new renderers must be included in the report
     assert "Calendar view" in html
     assert "cal-month" in html
-    assert "Event timeline chart" in html
+    # split timelines
+    assert "DNS event timeline" in html
+    assert "File event timeline" in html
     assert "event-timeline" in html
+    # per-key breakdown
+    assert "Per-key breakdown" in html
+    assert "K*.key file timings" in html

@@ -34,3 +34,9 @@ First a few fixes.  The dns_dnskey_appeared at zone and dns_ds_appeared_at_paren
 
 ---
 
+## 2026-04-11 07:07:20
+
+Let's split event timeline into two timelines 'dns' events and 'file' events.   dns being anything queried or reported by rndc and file being only when the files are changed.  I'd also like a page to look at an individual keys timeline (looks like that exists as 'events for this key' add the calendar and timeline to that.  Make sure to capture related DS events for KSKs.
+
+---
+

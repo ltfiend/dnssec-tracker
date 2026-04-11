@@ -40,9 +40,16 @@
 {{ calendar_html|safe }}
 {% endif %}
 
-{% if event_timeline_svg %}
-<h3>Event timeline</h3>
-<div class="timeline">{{ event_timeline_svg|safe }}</div>
+{% if dns_timeline_svg %}
+<h3>DNS event timeline</h3>
+<p class="meta">Events observed via live DNS queries and reported by <code>rndc dnssec&nbsp;-status</code>.</p>
+<div class="timeline">{{ dns_timeline_svg|safe }}</div>
+{% endif %}
+
+{% if file_timeline_svg %}
+<h3>File event timeline</h3>
+<p class="meta">Changes observed in the <code>K*.state</code> and <code>K*.key</code> files.</p>
+<div class="timeline">{{ file_timeline_svg|safe }}</div>
 {% endif %}
 
 {% if timeline_svg %}
