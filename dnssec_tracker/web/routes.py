@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -188,6 +190,34 @@ def build_router(db: Database, config: Config) -> APIRouter:
             offset=offset,
         )
         return JSONResponse([e.to_dict() for e in events])
+
+    # ---- Force refresh ---------------------------------------------
+
+    @router.post("/api/refresh")
+    async def api_refresh(request: Request) -> JSONResponse:
+        """Trigger an immediate sample pass on every collector.
+
+        Called by ``dnssec-tracker --refresh`` (and therefore by
+        ``docker exec dnssec-tracker dnssec-tracker --refresh``) so you
+        don't have to wait out the next poll tick to see fresh data.
+        Streaming collectors (syslog / named_log tails) are always
+        up-to-date within a second, so their entries will report
+        ``ok`` but with essentially zero elapsed time.
+        """
+
+        collectors = getattr(request.app.state, "collectors", []) or []
+        results: dict = {}
+        for c in collectors:
+            start = time.monotonic()
+            try:
+                await c.force_sample()
+                results[c.name] = {
+                    "ok": True,
+                    "ms": round((time.monotonic() - start) * 1000, 1),
+                }
+            except Exception as e:  # noqa: BLE001
+                results[c.name] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return JSONResponse({"refreshed": results})
 
     # ---- Reports ----------------------------------------------------
 

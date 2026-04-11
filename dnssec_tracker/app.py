@@ -69,6 +69,10 @@ def create_app(config: Config) -> FastAPI:
     app = FastAPI(title="dnssec-tracker", lifespan=lifespan)
     app.state.db = db
     app.state.config = config
+    # Expose the live collector list so POST /api/refresh can iterate
+    # the same instances the lifespan manager started. The list itself
+    # is populated when lifespan() runs on startup.
+    app.state.collectors = collectors
     app.include_router(build_router(db, config))
 
     static_dir = Path(__file__).parent / "web" / "static"

@@ -40,3 +40,9 @@ Let's split event timeline into two timelines 'dns' events and 'file' events.   
 
 ---
 
+## 2026-04-11 07:38:04
+
+add the ability to force all checks now.  present a `docker exec` command to force the checks in the running instance
+
+---
+

@@ -29,6 +29,9 @@ class Collector(ABC):
         self.config = config
         self.db = db
         self._stopping = asyncio.Event()
+        # Serialises scheduled and forced (out-of-band) sampling so a
+        # manual ``--refresh`` never overlaps a polling pass in-flight.
+        self._sample_lock = asyncio.Lock()
 
     async def sample(self) -> None:  # pragma: no cover - override
         raise NotImplementedError
@@ -38,7 +41,8 @@ class Collector(ABC):
         log.info("collector %s starting (interval=%ss)", self.name, self.interval)
         while not self._stopping.is_set():
             try:
-                await self.sample()
+                async with self._sample_lock:
+                    await self.sample()
             except Exception:  # noqa: BLE001
                 log.exception("collector %s sample failed", self.name)
             try:
@@ -46,6 +50,23 @@ class Collector(ABC):
             except asyncio.TimeoutError:
                 pass
         log.info("collector %s stopped", self.name)
+
+    async def force_sample(self) -> None:
+        """Run a single sample pass immediately, out-of-band.
+
+        Called by the ``POST /api/refresh`` endpoint (and therefore by
+        ``dnssec-tracker --refresh``) so you don't have to wait for the
+        next poll tick to see fresh data. Collectors that stream
+        indefinitely (syslog / named_log tails) are always up-to-date
+        within a second — their default behaviour here is a no-op.
+        """
+
+        async with self._sample_lock:
+            try:
+                await self.sample()
+            except NotImplementedError:
+                # Streaming collector — nothing meaningful to force.
+                pass
 
     def stop(self) -> None:
         self._stopping.set()

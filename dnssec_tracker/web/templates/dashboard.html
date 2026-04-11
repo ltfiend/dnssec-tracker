@@ -2,6 +2,12 @@
 {% block title %}Dashboard — dnssec-tracker{% endblock %}
 
 {% block content %}
+<div class="meta refresh-hint">
+  Force an immediate collector pass without waiting for the next poll:
+  <code>docker exec dnssec-tracker dnssec-tracker --refresh</code>
+  (or <code>POST /api/refresh</code> from the local network).
+</div>
+
 <h2>Zones</h2>
 {% if zones %}
 <table class="zones">

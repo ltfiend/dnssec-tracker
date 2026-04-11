@@ -123,6 +123,44 @@ docker compose -f docker-compose.example.yml up
 
 Then open <http://localhost:8080/>.
 
+### Forcing an immediate refresh
+
+The tracker normally polls on the intervals documented in
+[Traffic and load per zone](#traffic-and-load-per-zone). If you've just
+made a change and don't want to wait for the next tick, force every
+collector to run a sample pass right now:
+
+```bash
+docker exec dnssec-tracker dnssec-tracker --refresh
+```
+
+(or equivalently `docker compose exec dnssec-tracker dnssec-tracker --refresh`).
+
+This hits `POST /api/refresh` on the running instance inside the
+container and prints a per-collector timing summary, for example:
+
+```
+Forced refresh on http://127.0.0.1:8080/api/refresh:
+  state_file   ok   (4.2 ms)
+  key_file     ok   (3.1 ms)
+  syslog       ok   (0.0 ms)
+  named_log    ok   (0.0 ms)
+  dns_probe    ok   (62.4 ms)
+  rndc_status  ok   (118.7 ms)
+```
+
+Forced and scheduled samples share a per-collector lock so an
+out-of-band refresh never races a polling pass in-flight. For
+`dns_probe`, forcing runs **both** the zone probe and the parent DS
+probe — the usual 5-minute parent-interval gate is bypassed so you see
+the current parent state immediately. The streaming collectors
+(`syslog`, `named_log`) report `ok` in zero time because they already
+tail their files with one-second granularity.
+
+`POST /api/refresh` is unauthenticated, like the rest of the web UI —
+treat the tracker as a trusted-network tool and expose it via SSH
+tunnel or a reverse proxy in production.
+
 ### Mounts
 
 The container expects these read-only mounts:

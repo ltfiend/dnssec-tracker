@@ -50,7 +50,8 @@ class DnsProbeCollector(Collector):
 
         while not self._stopping.is_set():
             try:
-                await self._pass(loop.time())
+                async with self._sample_lock:
+                    await self._pass(loop.time())
             except Exception:  # noqa: BLE001
                 log.exception("dns_probe pass failed")
             try:
@@ -60,7 +61,7 @@ class DnsProbeCollector(Collector):
             except asyncio.TimeoutError:
                 pass
 
-    async def _pass(self, now_mono: float) -> None:
+    async def _pass(self, now_mono: float, *, force: bool = False) -> None:
         zones = self.db.list_zones()
         if not zones:
             return
@@ -68,10 +69,19 @@ class DnsProbeCollector(Collector):
         for zone in zones:
             await self._probe_zone(zone.name)
 
-        if now_mono - self._last_parent_ts >= self.config.parent_interval:
+        if force or now_mono - self._last_parent_ts >= self.config.parent_interval:
             for zone in zones:
                 await self._probe_parent(zone.name)
             self._last_parent_ts = now_mono
+
+    async def force_sample(self) -> None:
+        """Run both the zone probe and the parent DS probe immediately,
+        ignoring the parent-interval gate so every DNS observable is
+        refreshed on demand.
+        """
+        async with self._sample_lock:
+            loop = asyncio.get_event_loop()
+            await self._pass(loop.time(), force=True)
 
     async def _probe_zone(self, zone: str) -> None:
         snapshot: dict[str, list[str]] = {}

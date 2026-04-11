@@ -215,6 +215,14 @@ table th { background: var(--surface-alt); font-weight: 600; }
 }
 
 .meta { color: var(--muted); font-size: 0.9rem; }
+.refresh-hint {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  padding: 0.55rem 0.8rem;
+  margin: 0 0 1rem;
+  border-radius: 3px;
+}
 .timeline {
   overflow-x: auto;
   background: var(--surface);
