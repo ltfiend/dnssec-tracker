@@ -22,3 +22,9 @@ Add a dark theme please
 
 ---
 
+## 2026-04-11 06:48:37
+
+Can you update the readme with a detailed section discussing how much traffic the tool generates per zone.   I'd like real metrics X queries, Y rndc calls, etc.
+
+---
+
