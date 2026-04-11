@@ -3,6 +3,24 @@
 <head>
   <meta charset="utf-8">
   <title>{% block title %}dnssec-tracker{% endblock %}</title>
+  {#
+    Apply the stored theme before the stylesheet loads so the first
+    paint uses the correct palette (no "flash of light mode" when the
+    user has chosen dark). Three states:
+      - no attribute        = auto (follow prefers-color-scheme)
+      - data-theme="light"  = force light
+      - data-theme="dark"   = force dark
+  #}
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('dnssec-tracker-theme');
+        if (saved === 'light' || saved === 'dark') {
+          document.documentElement.dataset.theme = saved;
+        }
+      } catch (e) { /* ignore — localStorage might be disabled */ }
+    })();
+  </script>
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -11,10 +29,39 @@
     <nav>
       <a href="/">Dashboard</a>
       <a href="/events">Events</a>
+      <button id="theme-toggle" type="button" aria-label="Cycle theme">Theme: Auto</button>
     </nav>
   </header>
   <main>
     {% block content %}{% endblock %}
   </main>
+  <script>
+    (function () {
+      var btn = document.getElementById('theme-toggle');
+      if (!btn) return;
+      var labels = { auto: 'Theme: Auto', light: 'Theme: Light', dark: 'Theme: Dark' };
+      function current() {
+        return document.documentElement.dataset.theme || 'auto';
+      }
+      function render() {
+        btn.textContent = labels[current()];
+      }
+      render();
+      btn.addEventListener('click', function () {
+        var cur = current();
+        var next = cur === 'auto' ? 'light' : cur === 'light' ? 'dark' : 'auto';
+        try {
+          if (next === 'auto') {
+            delete document.documentElement.dataset.theme;
+            localStorage.removeItem('dnssec-tracker-theme');
+          } else {
+            document.documentElement.dataset.theme = next;
+            localStorage.setItem('dnssec-tracker-theme', next);
+          }
+        } catch (e) { /* ignore */ }
+        render();
+      });
+    })();
+  </script>
 </body>
 </html>

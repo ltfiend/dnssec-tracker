@@ -1,16 +1,111 @@
+/* ---- Palette ----------------------------------------------------
+ *
+ * Two complete palettes (light / dark). The "active" variables at the
+ * bottom of :root point at one or the other and get re-pointed by:
+ *   - @media (prefers-color-scheme: dark)          — automatic
+ *   - html[data-theme="dark"]                      — manual override
+ *   - html[data-theme="light"]                     — manual override
+ *
+ * Reports are excluded from dark mode because PDF/HTML exports are
+ * meant to be printed and shared on unknown backgrounds — the
+ * body.report selector at the bottom locks them back to the light
+ * palette regardless of the active theme.
+ * ---------------------------------------------------------------- */
 :root {
-  --fg: #1b1d22;
-  --bg: #f7f7f9;
-  --border: #dcdde3;
-  --muted: #6a707b;
-  --accent: #1f5fb0;
-  --state: #3e885b;
-  --key: #9a6b1a;
-  --syslog: #7a3a9f;
-  --dns: #0d6c8a;
-  --named: #b03b00;
-  --rndc: #a62e4f;
+  /* light palette */
+  --l-fg: #1b1d22;
+  --l-bg: #f7f7f9;
+  --l-surface: #ffffff;
+  --l-surface-alt: #eef0f4;
+  --l-border: #dcdde3;
+  --l-muted: #6a707b;
+  --l-accent: #1f5fb0;
+  --l-state: #3e885b;
+  --l-key: #9a6b1a;
+  --l-syslog: #7a3a9f;
+  --l-dns: #0d6c8a;
+  --l-named: #b03b00;
+  --l-rndc: #a62e4f;
+
+  /* dark palette */
+  --d-fg: #e5e7ed;
+  --d-bg: #0f1116;
+  --d-surface: #181b22;
+  --d-surface-alt: #22262f;
+  --d-border: #2a2f3a;
+  --d-muted: #8a909c;
+  --d-accent: #6aa6ff;
+  --d-state: #5ec07e;
+  --d-key: #e0b060;
+  --d-syslog: #c482e6;
+  --d-dns: #4dc6e6;
+  --d-named: #ff9060;
+  --d-rndc: #f08099;
+
+  /* active palette — defaults to light */
+  --fg: var(--l-fg);
+  --bg: var(--l-bg);
+  --surface: var(--l-surface);
+  --surface-alt: var(--l-surface-alt);
+  --border: var(--l-border);
+  --muted: var(--l-muted);
+  --accent: var(--l-accent);
+  --state: var(--l-state);
+  --key: var(--l-key);
+  --syslog: var(--l-syslog);
+  --dns: var(--l-dns);
+  --named: var(--l-named);
+  --rndc: var(--l-rndc);
+
+  color-scheme: light;
 }
+
+/* Auto dark via system preference, unless the user has explicitly
+ * locked light mode via the toggle. */
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) {
+    --fg: var(--d-fg);
+    --bg: var(--d-bg);
+    --surface: var(--d-surface);
+    --surface-alt: var(--d-surface-alt);
+    --border: var(--d-border);
+    --muted: var(--d-muted);
+    --accent: var(--d-accent);
+    --state: var(--d-state);
+    --key: var(--d-key);
+    --syslog: var(--d-syslog);
+    --dns: var(--d-dns);
+    --named: var(--d-named);
+    --rndc: var(--d-rndc);
+    color-scheme: dark;
+  }
+}
+
+/* Manual dark override — wins over the media query. */
+html[data-theme="dark"] {
+  --fg: var(--d-fg);
+  --bg: var(--d-bg);
+  --surface: var(--d-surface);
+  --surface-alt: var(--d-surface-alt);
+  --border: var(--d-border);
+  --muted: var(--d-muted);
+  --accent: var(--d-accent);
+  --state: var(--d-state);
+  --key: var(--d-key);
+  --syslog: var(--d-syslog);
+  --dns: var(--d-dns);
+  --named: var(--d-named);
+  --rndc: var(--d-rndc);
+  color-scheme: dark;
+}
+
+/* Manual light override — defaults already match, but the explicit
+ * rule makes sure the media query above never flips us back. */
+html[data-theme="light"] {
+  color-scheme: light;
+}
+
+/* ---- Base -------------------------------------------------------- */
 body {
   margin: 0;
   font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
@@ -18,51 +113,151 @@ body {
   background: var(--bg);
 }
 header {
-  background: #fff;
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
   padding: 0.8rem 1.4rem;
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+  gap: 0.8rem;
 }
 header h1 { margin: 0; font-size: 1.2rem; }
 header h1 a { text-decoration: none; color: var(--fg); }
-header nav a { margin-left: 1rem; color: var(--accent); text-decoration: none; }
+header nav { display: flex; align-items: baseline; gap: 1rem; }
+header nav a { color: var(--accent); text-decoration: none; }
+
+#theme-toggle {
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--muted);
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.15rem 0.55rem;
+  cursor: pointer;
+}
+#theme-toggle:hover { color: var(--fg); border-color: var(--accent); }
 
 main { padding: 1.2rem 1.4rem 3rem; max-width: 1200px; margin: 0 auto; }
 
 h2 { margin-top: 1.6rem; }
-code { background: #eef0f4; padding: 0.05rem 0.3rem; border-radius: 3px; }
+a { color: var(--accent); }
+code {
+  background: var(--surface-alt);
+  color: var(--fg);
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+}
 
-table { border-collapse: collapse; width: 100%; background: #fff; }
-table th, table td { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); text-align: left; font-size: 0.88rem; vertical-align: top; }
-table th { background: #eef0f4; font-weight: 600; }
-.ts { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 0.82rem; color: var(--muted); white-space: nowrap; }
+/* ---- Tables ------------------------------------------------------ */
+table { border-collapse: collapse; width: 100%; background: var(--surface); }
+table th, table td {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: 0.88rem;
+  vertical-align: top;
+}
+table th { background: var(--surface-alt); font-weight: 600; }
+.ts {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.82rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
 
-.badge { display: inline-block; font-size: 0.72rem; padding: 0.1rem 0.4rem; border-radius: 3px; background: #eef0f4; color: var(--muted); }
-.src-state .badge { background: #e1efe6; color: var(--state); }
-.src-key .badge { background: #f3ead8; color: var(--key); }
-.src-syslog .badge { background: #ece1f2; color: var(--syslog); }
-.src-dns .badge { background: #daecf1; color: var(--dns); }
-.src-named .badge { background: #f5dfd1; color: var(--named); }
-.src-rndc .badge { background: #f3dee5; color: var(--rndc); }
+/* ---- Badges (source pill) --------------------------------------- */
+.badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  background: var(--surface-alt);
+  color: var(--muted);
+}
+.src-state  .badge { background: color-mix(in srgb, var(--state)  18%, var(--surface)); color: var(--state); }
+.src-key    .badge { background: color-mix(in srgb, var(--key)    18%, var(--surface)); color: var(--key); }
+.src-syslog .badge { background: color-mix(in srgb, var(--syslog) 18%, var(--surface)); color: var(--syslog); }
+.src-dns    .badge { background: color-mix(in srgb, var(--dns)    18%, var(--surface)); color: var(--dns); }
+.src-named  .badge { background: color-mix(in srgb, var(--named)  18%, var(--surface)); color: var(--named); }
+.src-rndc   .badge { background: color-mix(in srgb, var(--rndc)   18%, var(--surface)); color: var(--rndc); }
 
-.action { display: inline-block; margin-right: 0.6rem; color: var(--accent); text-decoration: none; border: 1px solid var(--accent); padding: 0.15rem 0.5rem; border-radius: 3px; font-size: 0.82rem; }
+/* ---- Controls --------------------------------------------------- */
+.action {
+  display: inline-block;
+  margin-right: 0.6rem;
+  color: var(--accent);
+  text-decoration: none;
+  border: 1px solid var(--accent);
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  font-size: 0.82rem;
+}
 .action:hover { background: var(--accent); color: #fff; }
 
 .filters { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem; }
 .filters label { font-size: 0.82rem; color: var(--muted); display: flex; flex-direction: column; }
-.filters input { padding: 0.2rem 0.4rem; border: 1px solid var(--border); border-radius: 3px; }
-.filters button { align-self: end; padding: 0.3rem 0.8rem; background: var(--accent); color: #fff; border: 0; border-radius: 3px; cursor: pointer; }
+.filters input {
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--fg);
+}
+.filters button {
+  align-self: end;
+  padding: 0.3rem 0.8rem;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+}
 
 .meta { color: var(--muted); font-size: 0.9rem; }
-.timeline { overflow-x: auto; background: #fff; border: 1px solid var(--border); padding: 0.6rem; }
+.timeline {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 0.6rem;
+}
 
-/* report-specific styling — inlined for HTML/PDF exports */
-.report { max-width: none; padding: 2.5rem 2.5rem 3rem; background: #fff; }
+/* ---- Report (HTML + PDF export) --------------------------------
+ *
+ * Always use the light palette, no matter what the active UI theme is.
+ * PDFs and shared HTML files need to be printable on any background,
+ * so the report re-pins every active variable to its light value and
+ * forces color-scheme: light.
+ */
+body.report {
+  --fg: var(--l-fg);
+  --bg: var(--l-bg);
+  --surface: var(--l-surface);
+  --surface-alt: var(--l-surface-alt);
+  --border: var(--l-border);
+  --muted: var(--l-muted);
+  --accent: var(--l-accent);
+  --state: var(--l-state);
+  --key: var(--l-key);
+  --syslog: var(--l-syslog);
+  --dns: var(--l-dns);
+  --named: var(--l-named);
+  --rndc: var(--l-rndc);
+  color-scheme: light;
+  color: var(--l-fg);
+  background: #fff;
+}
+.report { max-width: none; padding: 2.5rem 2.5rem 3rem; }
 .report .cover { page-break-after: always; }
 .report .cover h1 { font-size: 2rem; margin-bottom: 0.2rem; }
 .report .cover h2 { font-size: 1.3rem; font-weight: 500; color: var(--muted); margin-top: 0; }
 .report section { page-break-inside: avoid; margin-top: 2rem; }
 .report .note { color: var(--muted); font-size: 0.88rem; }
-.report pre { background: #f4f4f7; padding: 0.7rem; border: 1px solid var(--border); border-radius: 3px; overflow-x: auto; font-size: 0.78rem; }
+.report pre {
+  background: var(--surface-alt);
+  padding: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow-x: auto;
+  font-size: 0.78rem;
+}
