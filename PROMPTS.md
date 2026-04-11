@@ -64,3 +64,9 @@ Adjust the events page so that they filter fields support regex for zone,type an
 
 ---
 
+## 2026-04-11 10:08:09
+
+Start a new branch and fire off a few agents to work a problem while I'm awaay.  I would like some more enhanced timeline / calendar charts.  In timeline lots of events at the same moment have their own dot, these could be combined and a hover window available to show all the events.  Also I want to be able to filter out events ( RRSIG / SOA) so I can focus on just DNSKey deployments.  Also KSK / ZSK filtering, ZSK excluding DS and stuff as well obviously.   Think about DNSviz output and give us an option for a chronological view that helps understand key rollovers and algorithm rollovers.  Don't lose the core functionality though, this is doing what I want.
+
+---
+
