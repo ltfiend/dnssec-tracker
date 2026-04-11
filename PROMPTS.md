@@ -46,3 +46,9 @@ add the ability to force all checks now.  present a `docker exec` command to for
 
 ---
 
+## 2026-04-11 07:51:41
+
+Let's add additonal logging for the tracker tool.  I need to be able to see exactly the queries that are being made to gather the information.  For example, the DS query to the parent should log the server IP being queried, the query name, qtype, protocol used, and optionally the response information.
+
+---
+

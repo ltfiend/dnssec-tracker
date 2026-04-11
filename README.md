@@ -89,6 +89,59 @@ even on a busy rollover.
   pass that sees the same snapshot as last time produces zero event
   rows and zero writes to `events.db`.
 
+### Query logging
+
+Every active probe (`dns_probe`, `rndc_status`) emits a structured
+`send` / `recv` log line at INFO level so you can see *exactly* what
+the tracker is asking for and what came back. The fields are
+consistent and grep-friendly:
+
+```
+dnssec_tracker.query.dns  INFO  send: server=127.0.0.1:53 protocol=UDP role=parent name=example.com type=DS timeout=5.0s
+dnssec_tracker.query.dns  INFO  recv: server=127.0.0.1:53 protocol=UDP role=parent name=example.com type=DS rcode=NOERROR answers=1 elapsed_ms=18.3
+dnssec_tracker.query.rndc INFO  send: server=127.0.0.1:953 zone=example.com cmd=/usr/sbin/rndc -k /mnt/bind/rndc.key -s 127.0.0.1 -p 953 dnssec -status example.com
+dnssec_tracker.query.rndc INFO  recv: server=127.0.0.1:953 zone=example.com rc=0 stdout_bytes=890 stderr_bytes=0 elapsed_ms=44.7
+```
+
+Fields for the DNS send line:
+
+| Field | Meaning |
+| --- | --- |
+| `server` | Resolver the query was sent to (the configured `local_resolver`; parent DS queries ride through the local recursor) |
+| `protocol` | `UDP` for the default dnspython resolver; upgrades to `UDP+TCP` on the `recv` line if the response had the TC bit set and a TCP retry happened |
+| `role` | `zone` for DNSKEY / SOA / CDS / CDNSKEY / RRSIG queries, `parent` for DS |
+| `name`, `type` | Qname and qtype |
+| `timeout` | Per-query timeout from `dns.query_timeout` |
+
+Fields added on the `recv` line: `rcode` (e.g. `NOERROR`, `NXDOMAIN`,
+`SERVFAIL`), `answers` (rrset record count), `elapsed_ms`. Failures
+(timeouts, network errors) are logged at WARNING with the exception
+class and message, so a filter like `grep '^\w*\s*WARNING'` will show
+only the unhealthy queries.
+
+The individual answer records are logged at DEBUG under the same
+loggers, so `--log-level DEBUG` dumps the full wire-form rdata
+alongside the summary line without flooding normal operation. To
+focus on one channel:
+
+```bash
+# only DNS queries, not rndc
+docker logs -f dnssec-tracker 2>&1 | grep dnssec_tracker.query.dns
+
+# only failures across both channels
+docker logs -f dnssec-tracker 2>&1 | grep 'query\.\(dns\|rndc\).*WARNING'
+```
+
+Running the container with `--log-level DEBUG` enables the answer
+dumps:
+
+```yaml
+# docker-compose.example.yml
+    command: ["python", "-m", "dnssec_tracker",
+              "--config", "/etc/dnssec-tracker/dnssec-tracker.conf",
+              "--log-level", "DEBUG"]
+```
+
 ### Dialling it down
 
 Every knob above is in `config/dnssec-tracker.conf.example` under its

@@ -13,12 +13,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+import time
 
 from ..models import Event, now_iso
 from ..parsers.rndc_status import diff_status, parse_rndc_status
 from .base import Collector
 
 log = logging.getLogger("dnssec_tracker.collector.rndc_status")
+query_log = logging.getLogger("dnssec_tracker.query.rndc")
 
 
 class RndcStatusCollector(Collector):
@@ -111,6 +113,14 @@ class RndcStatusCollector(Collector):
         return Path(path).exists()
 
     async def _run_rndc(self, zone: str) -> str:
+        """Run ``rndc dnssec -status <zone>`` and log the exec.
+
+        Emits an INFO ``send`` line before the subprocess starts (with
+        the full argv, target server, and zone) and an INFO ``recv``
+        line after, with returncode, stdout/stderr byte counts, and
+        elapsed ms. The full stdout text is logged at DEBUG.
+        """
+
         cmd = [self.config.rndc_bin]
         if self.config.rndc_key_file:
             cmd.extend(["-k", str(self.config.rndc_key_file)])
@@ -122,6 +132,14 @@ class RndcStatusCollector(Collector):
                 cmd.extend(["-p", port])
         cmd.extend(["dnssec", "-status", zone])
 
+        query_log.info(
+            "send: server=%s zone=%s cmd=%s",
+            self.config.rndc_server or "(default)",
+            zone,
+            " ".join(cmd),
+        )
+
+        start = time.monotonic()
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -132,10 +150,34 @@ class RndcStatusCollector(Collector):
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
+            elapsed_ms = (time.monotonic() - start) * 1000
+            query_log.warning(
+                "recv: server=%s zone=%s TIMED_OUT elapsed_ms=%.1f",
+                self.config.rndc_server or "(default)", zone, elapsed_ms,
+            )
             raise RndcError("timed out")
+
+        elapsed_ms = (time.monotonic() - start) * 1000
         if proc.returncode != 0:
-            raise RndcError(stderr.decode("utf-8", errors="replace").strip())
-        return stdout.decode("utf-8", errors="replace")
+            err = stderr.decode("utf-8", errors="replace").strip()
+            query_log.warning(
+                "recv: server=%s zone=%s rc=%s stderr=%r elapsed_ms=%.1f",
+                self.config.rndc_server or "(default)",
+                zone, proc.returncode, err, elapsed_ms,
+            )
+            raise RndcError(err)
+
+        out_text = stdout.decode("utf-8", errors="replace")
+        query_log.info(
+            "recv: server=%s zone=%s rc=0 stdout_bytes=%d stderr_bytes=%d elapsed_ms=%.1f",
+            self.config.rndc_server or "(default)",
+            zone, len(stdout), len(stderr), elapsed_ms,
+        )
+        query_log.debug(
+            "stdout: server=%s zone=%s\n%s",
+            self.config.rndc_server or "(default)", zone, out_text,
+        )
+        return out_text
 
 
 class RndcError(RuntimeError):

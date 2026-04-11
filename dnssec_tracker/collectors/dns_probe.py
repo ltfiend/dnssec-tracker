@@ -17,10 +17,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import dns.asyncresolver
 import dns.dnssec
 import dns.exception
+import dns.flags
+import dns.rcode
 import dns.rdata
 import dns.rdataclass
 import dns.rdatatype
@@ -29,6 +32,7 @@ from ..models import Event, now_iso
 from .base import Collector
 
 log = logging.getLogger("dnssec_tracker.collector.dns_probe")
+query_log = logging.getLogger("dnssec_tracker.query.dns")
 
 
 class DnsProbeCollector(Collector):
@@ -86,11 +90,11 @@ class DnsProbeCollector(Collector):
     async def _probe_zone(self, zone: str) -> None:
         snapshot: dict[str, list[str]] = {}
         for rrtype in ("DNSKEY", "SOA", "CDS", "CDNSKEY"):
-            snapshot[rrtype] = await self._query_rrset(zone, rrtype)
+            snapshot[rrtype] = await self._query_rrset(zone, rrtype, role="zone")
         # RRSIG is pulled in only when querying with DO bit; we
         # approximate by asking for the RRSIG cover of DNSKEY via a
         # generic RRSIG query (works against authoritative servers).
-        snapshot["RRSIG"] = await self._query_rrset(zone, "RRSIG")
+        snapshot["RRSIG"] = await self._query_rrset(zone, "RRSIG", role="zone")
 
         prev = self.db.get_snapshot(self.name, f"zone:{zone}")
         self._emit_diff(zone, "dns", prev, snapshot, parent=False)
@@ -99,21 +103,93 @@ class DnsProbeCollector(Collector):
     async def _probe_parent(self, zone: str) -> None:
         # For DS queries we ask the configured local resolver — a
         # recursive resolver will chase the delegation to the parent,
-        # which is good enough for long-window observation.
-        rrs = await self._query_rrset(zone, "DS")
+        # which is good enough for long-window observation. The query
+        # log marks this as role=parent so it's easy to tell apart
+        # from zone-side DNS traffic.
+        rrs = await self._query_rrset(zone, "DS", role="parent")
         snapshot = {"DS": rrs}
         prev = self.db.get_snapshot(self.name, f"parent:{zone}")
         self._emit_diff(zone, "dns", prev, snapshot, parent=True)
         self.db.set_snapshot(self.name, f"parent:{zone}", snapshot)
 
-    async def _query_rrset(self, name: str, rrtype: str) -> list[str]:
+    async def _query_rrset(
+        self, name: str, rrtype: str, *, role: str = "zone"
+    ) -> list[str]:
+        """Send one DNS query and return the sorted rdata text list.
+
+        Every query emits a structured INFO-level log line on both
+        send and receive, so operators can see exactly what went out
+        and what came back. The fields are::
+
+            server=<ip>:<port> protocol=<UDP|TCP> role=<zone|parent>
+            name=<qname> type=<qtype> timeout=<seconds>
+            rcode=<NOERROR|...> answers=<n> elapsed_ms=<float>
+
+        Individual answer records are logged at DEBUG level so you
+        can dump them with ``--log-level DEBUG`` if you need the
+        wire-form payload for offline analysis, without flooding
+        INFO under normal operation.
+        """
+
+        server = (
+            self._resolver.nameservers[0]
+            if self._resolver.nameservers
+            else "?"
+        )
+        port = self._resolver.port or 53
+        # dnspython's asyncresolver uses UDP by default with automatic
+        # TCP fallback on a truncated response; we note the nominal
+        # protocol here and upgrade the log line to "UDP+TCP" below if
+        # the response we received has the TC bit set, which means a
+        # TCP retry happened.
+        protocol = "UDP"
+        timeout = float(self._resolver.lifetime or 0.0)
+
+        query_log.info(
+            "send: server=%s:%s protocol=%s role=%s name=%s type=%s timeout=%.1fs",
+            server, port, protocol, role, name, rrtype, timeout,
+        )
+
+        start = time.monotonic()
         try:
-            ans = await self._resolver.resolve(name, rrtype, raise_on_no_answer=False)
-        except (dns.exception.DNSException, OSError):
+            ans = await self._resolver.resolve(
+                name, rrtype, raise_on_no_answer=False
+            )
+        except (dns.exception.DNSException, OSError) as exc:
+            elapsed_ms = (time.monotonic() - start) * 1000
+            query_log.warning(
+                "recv: server=%s:%s role=%s name=%s type=%s FAILED %s=%s elapsed_ms=%.1f",
+                server, port, role, name, rrtype,
+                type(exc).__name__, exc, elapsed_ms,
+            )
             return []
-        if ans.rrset is None:
-            return []
-        return sorted(str(r) for r in ans.rrset)
+
+        elapsed_ms = (time.monotonic() - start) * 1000
+        response = getattr(ans, "response", None)
+        if response is not None:
+            try:
+                rcode_name = dns.rcode.to_text(response.rcode())
+            except Exception:  # noqa: BLE001
+                rcode_name = "?"
+            if response.flags & dns.flags.TC:
+                protocol = "UDP+TCP"
+        else:
+            rcode_name = "?"
+
+        rrset = ans.rrset
+        answers = list(rrset) if rrset is not None else []
+        query_log.info(
+            "recv: server=%s:%s protocol=%s role=%s name=%s type=%s "
+            "rcode=%s answers=%d elapsed_ms=%.1f",
+            server, port, protocol, role, name, rrtype,
+            rcode_name, len(answers), elapsed_ms,
+        )
+        for r in answers:
+            query_log.debug(
+                "answer: server=%s:%s name=%s type=%s rdata=%s",
+                server, port, name, rrtype, r,
+            )
+        return sorted(str(r) for r in answers)
 
     def _emit_diff(
         self,
