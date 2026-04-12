@@ -69,8 +69,8 @@
 <div class="timeline">{{ timeline_svg|safe }}</div>
 {% endif %}
 
-<h3>Event log</h3>
-<form method="get" class="filters">
+<h3 id="event-log">Event log</h3>
+<form method="get" action="/zones/{{ zone.name }}#event-log" class="filters">
   <label>
     Role
     <select name="role">
@@ -94,7 +94,7 @@
     <input type="text" name="hide_sources" value="{{ hide_sources or '' }}" placeholder="dns,rndc,state,key,syslog,named">
   </label>
   <button type="submit">Apply</button>
-  <a class="clear" href="/zones/{{ zone.name }}">Clear</a>
+  <a class="clear" href="/zones/{{ zone.name }}#event-log">Clear</a>
 </form>
 <p class="meta filter-note">
   Filters apply to every section on this page (timelines, calendar, and

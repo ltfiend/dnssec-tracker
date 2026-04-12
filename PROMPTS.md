@@ -169,3 +169,9 @@ On the zone info page there is a filterint bar at the top with 'Role, hide types
 
 ---
 
+## 2026-04-12 08:34:06
+
+Can the event log view on the zones page update live.  It's a little clunky to select an item from the list, click apply, then be moved to the top of the page.   Alternatively just keep it focused on the event log portion.
+
+---
+
