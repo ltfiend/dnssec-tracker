@@ -163,3 +163,9 @@ Snapshots are keyed exactly as `f"{zone}#{key_tag}#{role}"` with values shaped `
 
 ---
 
+## 2026-04-12 08:11:49
+
+On the zone info page there is a filterint bar at the top with 'Role, hide types, hide sources'.  That should be right above the events rather than where it is now.  Also the Rollover view is good but the text 'Rollover view: 2026-04-11 11:03 - 2026-04-12 12:08 UTC is written over the top legend on the timeline.  See if you can adjust that.
+
+---
+

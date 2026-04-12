@@ -489,10 +489,15 @@ def render_rollover_view(
         f'font-family="sans-serif" font-size="11" class="rollover-view">'
     )
 
-    # Title strip
+    # Date-range label — right-aligned at the top of the chart area,
+    # small and muted so it sits alongside the axis ticks without
+    # overlapping the group headers or tick labels. The section <h3>
+    # in the template already says "Rollover view" so we don't
+    # duplicate that as a bold title inside the SVG.
     parts.append(
-        f'<text x="{margin_left}" y="20" font-weight="600" fill="currentColor">'
-        f'Rollover view: {escape(t_start.strftime("%Y-%m-%d %H:%M"))} &#x2192; '
+        f'<text x="{width - margin_right}" y="14" text-anchor="end" '
+        f'font-size="10" fill="currentColor" fill-opacity="0.55">'
+        f'{escape(t_start.strftime("%Y-%m-%d %H:%M"))} &#x2192; '
         f'{escape(t_end.strftime("%Y-%m-%d %H:%M"))} UTC</text>'
     )
 
