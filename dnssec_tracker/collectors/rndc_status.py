@@ -73,7 +73,52 @@ class RndcStatusCollector(Collector):
                     )
                 )
             else:
+                # When a key vanishes from the rndc output entirely,
+                # diff_status produces a (tag, field, old, None) tuple
+                # for every field the previous snapshot held — that
+                # used to spam the event log with ~9 synthetic
+                # rndc_state_changed rows per deletion. Collapse each
+                # vanished key into one rndc_key_deleted event
+                # instead, and strip those tags out of the per-field
+                # change list so the remaining events are only real
+                # field transitions on keys that are still live.
+                vanished_tags = {
+                    t for t in prev_snap if t not in snapshot
+                }
+                role_by_tag: dict[int, str] = {}
+                if vanished_tags:
+                    # Look up roles once — the rndc status output no
+                    # longer carries them (the key is gone), but the
+                    # keys table in the tracker still has the row
+                    # from earlier observation.
+                    for k in self.db.list_keys(zone.name):
+                        role_by_tag[k.key_tag] = k.role
+                for tag_s in vanished_tags:
+                    tag = int(tag_s)
+                    role = role_by_tag.get(tag)
+                    self.db.insert_event(
+                        Event(
+                            ts=now_iso(),
+                            source="rndc",
+                            event_type="rndc_key_deleted",
+                            summary=(
+                                f"{zone.name} {role or ''} tag={tag} "
+                                f"no longer reported by rndc dnssec -status "
+                                f"(key deleted)"
+                            ),
+                            zone=zone.name,
+                            key_tag=tag,
+                            key_role=role,
+                            detail={
+                                "policy": status.policy,
+                                "last_state": prev_snap.get(tag_s, {}),
+                            },
+                        )
+                    )
+
                 for tag, field_name, old, new in changes:
+                    if str(tag) in vanished_tags:
+                        continue  # folded into the rndc_key_deleted event
                     key_row = next((k for k in status.keys if k.key_tag == tag), None)
                     role = key_row.role if key_row else None
                     self.db.insert_event(

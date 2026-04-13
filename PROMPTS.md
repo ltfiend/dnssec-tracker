@@ -211,3 +211,9 @@ make it so anywhere a domain name appears it will be a link to the page for that
 
 ---
 
+## 2026-04-12 21:44:22
+
+Update to understand that when the 'rndc state changed' is triggerd for all the items in the key that it's because the key has been deleted and record that as a single 'key deleted' event
+
+---
+
