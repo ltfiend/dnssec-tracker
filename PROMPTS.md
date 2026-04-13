@@ -199,3 +199,9 @@ Let's fix the calendars a bit.  They are showing years back but none of the prev
 
 ---
 
+## 2026-04-12 21:12:54
+
+keep focus on calendar when clicking 'earlier' / 'later'
+
+---
+
