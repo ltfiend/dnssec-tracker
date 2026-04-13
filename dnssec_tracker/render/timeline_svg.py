@@ -95,13 +95,20 @@ def render_state_timeline(events: list[Event], keys: list[Key]) -> str:
     width = margin_left + content_w + 20
     height = margin_top + (lane_h + lane_gap) * len(lanes) + 40
 
+    # All plain text uses currentColor so it reads against whichever
+    # theme the page is in (dark UI: light fg; light UI / report:
+    # dark fg). Lane chrome uses the shared surface/border variables
+    # for the same reason. Segment labels are painted over fixed
+    # state colours so they use a black+white-outline halo that
+    # stays legible on any fill.
     parts: list[str] = []
     parts.append(
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
         f'font-family="sans-serif" font-size="11">'
     )
     parts.append(
-        f'<text x="{margin_left}" y="18" font-weight="600">'
+        f'<text x="{margin_left}" y="18" font-weight="600" '
+        f'fill="currentColor">'
         f'{escape(t_start.isoformat())} &#x2192; {escape(t_end.isoformat())}</text>'
     )
 
@@ -109,11 +116,12 @@ def render_state_timeline(events: list[Event], keys: list[Key]) -> str:
     for (tag, role, field_name), segs in sorted(lanes.items()):
         label = f"{role} {tag} · {field_name}"
         parts.append(
-            f'<text x="{margin_left - 8}" y="{y + lane_h - 6}" text-anchor="end">{escape(label)}</text>'
+            f'<text x="{margin_left - 8}" y="{y + lane_h - 6}" '
+            f'text-anchor="end" fill="currentColor">{escape(label)}</text>'
         )
         parts.append(
             f'<rect x="{margin_left}" y="{y}" width="{content_w}" height="{lane_h}" '
-            f'fill="#f5f5f7" stroke="#dcdde3"/>'
+            f'fill="var(--surface-alt)" stroke="var(--border)"/>'
         )
         for t0, t1, value in segs:
             seg_x = margin_left + t0 * content_w
@@ -124,8 +132,14 @@ def render_state_timeline(events: list[Event], keys: list[Key]) -> str:
                 f'fill="{colour}" stroke="#555" stroke-width="0.3"><title>{escape(value)}</title></rect>'
             )
             if seg_w > 40:
+                # paint-order="stroke fill" draws the white halo
+                # *behind* the black fill, giving the text a tiny
+                # outline that reads on every STATE_COLORS fill
+                # (amber, green, red, light grey) in both themes.
                 parts.append(
-                    f'<text x="{seg_x + 4:.1f}" y="{y + lane_h - 6}" fill="#222">{escape(value)}</text>'
+                    f'<text x="{seg_x + 4:.1f}" y="{y + lane_h - 6}" '
+                    f'fill="#111" stroke="#fff" stroke-width="2" '
+                    f'paint-order="stroke fill">{escape(value)}</text>'
                 )
         y += lane_h + lane_gap
 
@@ -136,7 +150,10 @@ def render_state_timeline(events: list[Event], keys: list[Key]) -> str:
         parts.append(
             f'<rect x="{lx}" y="{legend_y}" width="14" height="10" fill="{colour}" stroke="#555"/>'
         )
-        parts.append(f'<text x="{lx + 18}" y="{legend_y + 9}">{escape(name)}</text>')
+        parts.append(
+            f'<text x="{lx + 18}" y="{legend_y + 9}" fill="currentColor">'
+            f'{escape(name)}</text>'
+        )
         lx += 120
 
     parts.append("</svg>")
@@ -183,6 +200,7 @@ def _empty_svg(message: str) -> str:
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 60" '
         'font-family="sans-serif" font-size="12">'
-        f'<text x="10" y="30" fill="#6a707b">{escape(message)}</text>'
+        f'<text x="10" y="30" fill="currentColor" fill-opacity="0.6">'
+        f'{escape(message)}</text>'
         "</svg>"
     )
