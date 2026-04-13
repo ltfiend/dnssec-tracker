@@ -1,4 +1,5 @@
 {% extends "layout.html" %}
+{% from "_macros.html" import key_link %}
 {% block title %}{{ zone.name }} — dnssec-tracker{% endblock %}
 
 {% block content %}
@@ -145,7 +146,7 @@
     <tr class="src-{{ e.source }}">
       <td class="ts">{{ e.ts }}</td>
       <td><span class="badge">{{ e.source }}</span></td>
-      <td>{% if e.key_tag %}{{ e.key_role or '' }} {{ e.key_tag }}{% endif %}</td>
+      <td>{{ key_link(e.zone or zone.name, e.key_tag, e.key_role) }}</td>
       <td>{{ e.event_type }}</td>
       <td>{{ e.summary }}</td>
     </tr>

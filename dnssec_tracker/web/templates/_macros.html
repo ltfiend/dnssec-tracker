@@ -1,0 +1,29 @@
+{# Shared Jinja macros for cross-linking the live UI.
+
+   The same zone name and key tag appear in many tables (dashboard
+   recent events, /events, zone event log, etc.). These macros keep
+   the link markup identical across all of them so clicking a zone
+   anywhere lands on that zone's page, and clicking a key anywhere
+   lands on that key's page. Safe for empty inputs — they emit
+   nothing when the zone/tag is None so cells for zone-wide events
+   (e.g. SOA) stay blank rather than broken.
+
+   The report template (report.html) deliberately does NOT use
+   these because the HTML/PDF exports are meant to be standalone
+   archival artefacts — the tracker's URLs aren't reachable from a
+   recipient's inbox.
+#}
+
+{% macro zone_link(zone) -%}
+{%- if zone -%}
+<a href="/zones/{{ zone }}">{{ zone }}</a>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro key_link(zone, tag, role=None) -%}
+{%- if tag and zone -%}
+<a href="/zones/{{ zone }}/keys/{{ tag }}">{% if role %}{{ role }} {% endif %}{{ tag }}</a>
+{%- elif tag -%}
+{% if role %}{{ role }} {% endif %}{{ tag }}
+{%- endif -%}
+{%- endmacro %}

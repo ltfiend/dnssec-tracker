@@ -205,3 +205,9 @@ keep focus on calendar when clicking 'earlier' / 'later'
 
 ---
 
+## 2026-04-12 21:39:47
+
+make it so anywhere a domain name appears it will be a link to the page for that domain.  same for any keys.   for example, in events.
+
+---
+
