@@ -50,6 +50,11 @@ LABEL_WORTHY_TYPES = {
     "named_dnskey_published",
     "named_dnskey_active",
     "named_dnskey_retired",
+    # Operator-issued `rndc dnssec -checkds ... published|withdrawn`.
+    # Deliberately surfaced because manual state changes are rare
+    # and usually the thing you most want to see when reviewing a
+    # timeline.
+    "named_manual_checkds",
     "dns_ds_appeared_at_parent",
     "dns_ds_disappeared_at_parent",
     "dns_dnskey_appeared_at_zone",

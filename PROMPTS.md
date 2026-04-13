@@ -217,3 +217,9 @@ Update to understand that when the 'rndc state changed' is triggerd for all the 
 
 ---
 
+## 2026-04-13 11:52:31
+
+Please see if you can add a state change for when someone issues the command `rndc dnssec -checkds -key <id> published <zone>`.  Make sure it's identified as a manual state change.
+
+---
+
