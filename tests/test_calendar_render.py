@@ -67,3 +67,56 @@ def test_calendar_multiple_events_become_higher_density(tmp_path):
     assert "count-l" in html
     # Today marker should be applied.
     assert "cal-today" in html
+
+
+# ---- scheduled-date overlay -----------------------------------------
+
+from datetime import date as _date
+
+
+def test_calendar_marks_scheduled_dates_and_extends_window():
+    """Scheduled dates from the K*.key header (Publish / Activate /
+    Inactive / Delete / SyncPublish / SyncDelete) render as hollow
+    markers on the calendar and *extend* the auto-window so upcoming
+    transitions past the last observed event still appear.
+    """
+    scheduled = {
+        _date(2026, 5, 1):  ["KSK tag 12345: Publish"],
+        _date(2026, 5, 8):  ["KSK tag 12345: Activate"],
+        _date(2026, 6, 15): ["KSK tag 12345: Inactive", "KSK tag 12345: Delete"],
+    }
+    events = [
+        Event(ts="2026-04-10T00:00:00Z", source="state",
+              event_type="state_changed", summary="…",
+              zone="example.com", key_tag=12345, key_role="KSK"),
+    ]
+
+    html = render_calendar(events, scheduled_dates=scheduled)
+
+    # Window auto-extended into June to include the Delete marker.
+    assert "April 2026" in html
+    assert "May 2026" in html
+    assert "June 2026" in html
+
+    # has-scheduled class is applied to the marked days.
+    assert "has-scheduled" in html
+    # The hollow square marker renders on those cells.
+    assert 'class="cal-scheduled-marker"' in html
+
+    # Tooltip lists the scheduled transitions.
+    assert "Publish" in html
+    assert "Activate" in html
+
+
+def test_calendar_no_scheduled_dates_keeps_existing_behaviour():
+    """Calling render_calendar without scheduled_dates (the legacy
+    contract) must produce no new markers — backward compat.
+    """
+    events = [
+        Event(ts="2026-04-10T00:00:00Z", source="state",
+              event_type="state_changed", summary="x",
+              zone="example.com", key_tag=1, key_role="KSK"),
+    ]
+    html = render_calendar(events)
+    assert "has-scheduled" not in html
+    assert 'class="cal-scheduled-marker"' not in html or "scheduled (from K*.key)" in html

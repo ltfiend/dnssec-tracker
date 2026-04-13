@@ -40,18 +40,26 @@ from ..models import Event, Key
 # propagate for free.
 PHASE_FILL = {
     "pre-publication": "#c8c8c8",
-    "published": "var(--rndc)",      # warm amber-ish in both palettes
-    "active": "var(--state)",        # the "doing its job" green
-    "retired": "var(--named)",       # muted orange
-    "removed": "#9a9a9a",
+    "published": "var(--rndc)",          # warm amber-ish in both palettes
+    "active": "var(--state)",            # the "doing its job" green
+    "to-be-deleted": "var(--named)",     # orange — not signing, scheduled for delete
+    "past-deletion-date": "#8b5a5a",     # muted dusty red — key should be gone
 }
 
 PHASE_DESCRIPTION = {
     "pre-publication": "generated but not yet in the DNSKEY RRset",
     "published": "DNSKEY visible but not yet signing",
     "active": "signing DNSKEY / zone data",
-    "retired": "not signing but still published for resolver caches",
-    "removed": "fully gone from the zone",
+    "to-be-deleted": "not signing, published for resolver caches, awaiting delete",
+    "past-deletion-date": "past scheduled delete time — should no longer be in the zone",
+}
+
+PHASE_LABEL = {
+    "pre-publication": "pre-publication",
+    "published": "published",
+    "active": "active",
+    "to-be-deleted": "to be deleted",
+    "past-deletion-date": "past deletion date",
 }
 
 # Event types that the DS-at-parent overlay cares about.
@@ -133,14 +141,44 @@ def _phase_segments_for_key(
     """
 
     fields: dict[str, str] = {}
-    if snapshot and isinstance(snapshot.get("fields"), dict):
-        fields = snapshot["fields"]
+    timings: dict[str, str] = {}
+    if snapshot:
+        if isinstance(snapshot.get("fields"), dict):
+            fields = snapshot["fields"]
+        # The wiring layer folds the K*.key file's scheduled timings
+        # (Created / Publish / Activate / Inactive / Delete / SyncPublish)
+        # into the same snapshot dict under "timings". The state-file
+        # values take precedence — they record what actually happened —
+        # but the key-file values fill in *scheduled* boundaries so a
+        # key that hasn't yet crossed, say, its Active time still shows
+        # the correct upcoming phase break instead of collapsing into
+        # an endless "pre-publication" segment.
+        if isinstance(snapshot.get("timings"), dict):
+            timings = snapshot["timings"]
 
-    gen = _parse_bind_ts(fields.get("Generated"))
-    pub = _parse_bind_ts(fields.get("Published"))
-    act = _parse_bind_ts(fields.get("Active"))
-    ret = _parse_bind_ts(fields.get("Retired"))
-    rem = _parse_bind_ts(fields.get("Removed"))
+    # Prefer state-file actuals; fall back to key-file scheduled times.
+    # ``_parse_bind_ts`` returns None for "0" and missing values, which
+    # is what lets ``a or b`` cleanly pick the first non-unset source.
+    gen = (
+        _parse_bind_ts(fields.get("Generated"))
+        or _parse_bind_ts(timings.get("Created"))
+    )
+    pub = (
+        _parse_bind_ts(fields.get("Published"))
+        or _parse_bind_ts(timings.get("Publish"))
+    )
+    act = (
+        _parse_bind_ts(fields.get("Active"))
+        or _parse_bind_ts(timings.get("Activate"))
+    )
+    ret = (
+        _parse_bind_ts(fields.get("Retired"))
+        or _parse_bind_ts(timings.get("Inactive"))
+    )
+    rem = (
+        _parse_bind_ts(fields.get("Removed"))
+        or _parse_bind_ts(timings.get("Delete"))
+    )
 
     # Fall back to events when the snapshot is missing.
     key_events = [
@@ -213,8 +251,8 @@ def _phase_segments_for_key(
         ("pre-publication", gen),
         ("published", pub),
         ("active", act),
-        ("retired", ret),
-        ("removed", rem),
+        ("to-be-deleted", ret),        # Inactive -> Delete
+        ("past-deletion-date", rem),   # past Delete, renders (no longer terminal)
     ]
 
     # Forward-fill: if "published" is missing but "active" exists, the
@@ -242,11 +280,13 @@ def _phase_segments_for_key(
         if i + 1 < len(cleaned):
             t1 = cleaned[i + 1][1]
         else:
-            # Last boundary:
-            #   * "removed" is a terminal marker — no segment past it.
-            #   * any other phase extends to window_end.
-            if name == "removed":
-                continue
+            # Last boundary extends to window_end. This includes
+            # ``past-deletion-date``: a key whose scheduled Delete has
+            # passed keeps rendering as that phase all the way to the
+            # chart's right edge so the operator can *see* that the
+            # key is overdue for removal — previously that segment was
+            # silently dropped and the bar just ended, which made
+            # post-Delete keys look like they never existed.
             t1 = window_end
         if t1 <= t0:
             continue
@@ -653,11 +693,13 @@ def render_rollover_view(
                     f'<title>{escape(tip)}</title></rect>'
                 )
                 # Short inline label if the segment is wide enough.
+                # Use the human-readable form from PHASE_LABEL so
+                # "to-be-deleted" renders as "to be deleted" etc.
                 if w > 44:
                     parts.append(
                         f'<text x="{x0 + 4:.1f}" y="{bar_y + bar_h - 8:.1f}" '
                         f'fill="currentColor" fill-opacity="0.9" font-size="9">'
-                        f'{escape(name)}</text>'
+                        f'{escape(PHASE_LABEL.get(name, name))}</text>'
                     )
 
             # DS overlay stripe for KSK / CSK rows. The stripe always
@@ -708,7 +750,13 @@ def render_rollover_view(
     # ----- legend ---------------------------------------------------------
     legend_y = total_height - 14
     lx = margin_left
-    legend_order = ["pre-publication", "published", "active", "retired", "removed"]
+    legend_order = [
+        "pre-publication",
+        "published",
+        "active",
+        "to-be-deleted",
+        "past-deletion-date",
+    ]
     for name in legend_order:
         fill = PHASE_FILL[name]
         parts.append(
@@ -716,11 +764,12 @@ def render_rollover_view(
             f'fill="{fill}" fill-opacity="0.85" '
             f'stroke="currentColor" stroke-opacity="0.4" stroke-width="0.3"/>'
         )
+        label = PHASE_LABEL.get(name, name)
         parts.append(
             f'<text x="{lx + 16}" y="{legend_y}" fill="currentColor" fill-opacity="0.8">'
-            f'{escape(name)}</text>'
+            f'{escape(label)}</text>'
         )
-        lx += 110
+        lx += 130
 
     parts.append("</svg>")
     return "".join(parts)

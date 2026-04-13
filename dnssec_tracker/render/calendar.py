@@ -50,25 +50,36 @@ def _iter_months(first: date, last: date) -> Iterable[tuple[int, int]]:
             y += 1
 
 
-def _window(events: list[Event], from_ts: str | None, to_ts: str | None) -> tuple[date, date]:
+def _window(
+    events: list[Event],
+    from_ts: str | None,
+    to_ts: str | None,
+    scheduled_dates: dict[date, list[str]] | None = None,
+) -> tuple[date, date]:
     """Resolve the calendar window.
 
     Explicit ``from``/``to`` take precedence; otherwise we bracket the
-    events themselves. An empty window degrades gracefully to the
-    current month.
+    events themselves. ``scheduled_dates`` extend the auto-window so a
+    Delete scheduled for next month shows up on the calendar even if
+    the last recorded event is today. An empty window degrades
+    gracefully to the current month.
     """
+
+    scheduled = list((scheduled_dates or {}).keys())
 
     if from_ts:
         start = _parse_ts(from_ts).date()
-    elif events:
-        start = min(_parse_ts(e.ts).date() for e in events)
+    elif events or scheduled:
+        starts = [_parse_ts(e.ts).date() for e in events] + scheduled
+        start = min(starts)
     else:
         start = date.today().replace(day=1)
 
     if to_ts:
         end = _parse_ts(to_ts).date()
-    elif events:
-        end = max(_parse_ts(e.ts).date() for e in events)
+    elif events or scheduled:
+        ends = [_parse_ts(e.ts).date() for e in events] + scheduled
+        end = max(ends)
     else:
         end = date.today()
 
@@ -83,6 +94,7 @@ def render_calendar(
     to_ts: str | None = None,
     *,
     today: date | None = None,
+    scheduled_dates: dict[date, list[str]] | None = None,
 ) -> str:
     """Return an HTML fragment of monthly calendar tables.
 
@@ -91,11 +103,17 @@ def render_calendar(
     * ``has-events`` — any event present
     * ``src-<source>`` for every source that fired on the date
     * ``count-<bucket>`` (1, 2-5, 6-20, 20+) for density shading
+    * ``has-scheduled`` — the date carries one or more scheduled
+      DNSSEC transitions (from the ``K*.key`` file's Publish /
+      Activate / Inactive / Delete / SyncPublish / SyncDelete
+      timings). The user asked for these so upcoming key milestones
+      show up on the calendar alongside the already-observed events.
 
     The report's inlined stylesheet styles every combination.
     """
 
-    start, end = _window(events, from_ts, to_ts)
+    scheduled_dates = scheduled_dates or {}
+    start, end = _window(events, from_ts, to_ts, scheduled_dates)
     today = today or date.today()
 
     by_day: dict[date, list[Event]] = defaultdict(list)
@@ -108,7 +126,9 @@ def render_calendar(
     parts.append(_legend())
 
     for year, month in _iter_months(start, end):
-        parts.append(_render_month(year, month, by_day, start, end, today))
+        parts.append(
+            _render_month(year, month, by_day, start, end, today, scheduled_dates)
+        )
 
     parts.append("</div>")
     return "".join(parts)
@@ -122,6 +142,10 @@ def _legend() -> str:
             f'{escape(SOURCE_LABEL[src])}</span>'
         )
     items.append(
+        '<span class="cal-legend-item"><span class="cal-scheduled-marker"></span>'
+        'scheduled (from K*.key)</span>'
+    )
+    items.append(
         '<span class="cal-legend-item"><span class="cal-dot cal-today-dot"></span>today</span>'
     )
     return '<div class="cal-legend">' + "".join(items) + "</div>"
@@ -134,10 +158,12 @@ def _render_month(
     window_start: date,
     window_end: date,
     today: date,
+    scheduled_dates: dict[date, list[str]] | None = None,
 ) -> str:
     cal = calendar.Calendar(firstweekday=0)  # Monday = 0
     weeks = cal.monthdatescalendar(year, month)
     month_name = calendar.month_name[month]
+    scheduled_dates = scheduled_dates or {}
 
     rows: list[str] = []
     for week in weeks:
@@ -146,6 +172,7 @@ def _render_month(
             in_month = d.month == month
             in_window = window_start <= d <= window_end
             day_events = by_day.get(d, []) if in_window else []
+            day_scheduled = scheduled_dates.get(d, []) if in_window else []
 
             classes = ["cal-cell"]
             if not in_month:
@@ -157,6 +184,8 @@ def _render_month(
             if day_events:
                 classes.append("has-events")
                 classes.append(_density_class(len(day_events)))
+            if day_scheduled:
+                classes.append("has-scheduled")
 
             sources_present = {e.source for e in day_events}
             dots = "".join(
@@ -164,8 +193,13 @@ def _render_month(
                 for src in SOURCE_ORDER
                 if src in sources_present
             )
+            # The scheduled marker is a hollow outlined square to
+            # distinguish it from the solid source dots — visually
+            # says "this hasn't happened yet, it's on the calendar".
+            if day_scheduled:
+                dots += '<span class="cal-scheduled-marker"></span>'
 
-            title = _tooltip(d, day_events)
+            title = _tooltip(d, day_events, day_scheduled)
             cells.append(
                 f'<td class="{" ".join(classes)}" title="{escape(title)}">'
                 f'<span class="cal-day">{d.day}</span>'
@@ -197,21 +231,34 @@ def _density_class(count: int) -> str:
     return "count-s"
 
 
-def _tooltip(d: date, events: list[Event]) -> str:
-    if not events:
+def _tooltip(
+    d: date,
+    events: list[Event],
+    scheduled: list[str] | None = None,
+) -> str:
+    scheduled = scheduled or []
+    if not events and not scheduled:
         return d.isoformat()
-    lines: list[str] = [d.isoformat(), f"{len(events)} event(s)"]
-    counts: dict[str, int] = defaultdict(int)
-    for e in events:
-        counts[e.source] += 1
-    for src in SOURCE_ORDER:
-        if src in counts:
-            lines.append(f"  {SOURCE_LABEL[src]}: {counts[src]}")
-    # Up to 5 sample summaries
-    sample = events[:5]
-    lines.append("")
-    for e in sample:
-        lines.append(f"- {e.summary[:90]}")
-    if len(events) > 5:
-        lines.append(f"... and {len(events) - 5} more")
+    lines: list[str] = [d.isoformat()]
+    if events:
+        lines.append(f"{len(events)} event(s)")
+        counts: dict[str, int] = defaultdict(int)
+        for e in events:
+            counts[e.source] += 1
+        for src in SOURCE_ORDER:
+            if src in counts:
+                lines.append(f"  {SOURCE_LABEL[src]}: {counts[src]}")
+        # Up to 5 sample summaries
+        sample = events[:5]
+        lines.append("")
+        for e in sample:
+            lines.append(f"- {e.summary[:90]}")
+        if len(events) > 5:
+            lines.append(f"... and {len(events) - 5} more")
+    if scheduled:
+        if events:
+            lines.append("")
+        lines.append(f"{len(scheduled)} scheduled DNSSEC transition(s):")
+        for s in scheduled:
+            lines.append(f"- {s}")
     return "\n".join(lines)

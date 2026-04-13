@@ -23,6 +23,48 @@ from .templating import create_env
 from .timeline_svg import render_rndc_timeline, render_state_timeline
 
 
+_SCHEDULED_KEY_TIMINGS = (
+    "Publish", "Activate", "Inactive", "Delete", "SyncPublish", "SyncDelete",
+)
+
+
+def _scheduled_dates_for_keys(db: Database, keys) -> dict:
+    """Walk every key's ``key_file`` snapshot and return a
+    ``{date: [description, ...]}`` mapping for the calendar's
+    scheduled-markers overlay. Mirrors the helper of the same name in
+    ``web/routes.py`` — kept local here so the report module has no
+    route-layer dependency.
+    """
+    from collections import defaultdict
+    from datetime import datetime as _dt
+
+    def _parse(ts):
+        if not ts or ts == "0":
+            return None
+        s = str(ts).strip()
+        if len(s) != 14 or not s.isdigit():
+            return None
+        try:
+            return _dt(
+                int(s[0:4]), int(s[4:6]), int(s[6:8]),
+                int(s[8:10]), int(s[10:12]), int(s[12:14]),
+            )
+        except ValueError:
+            return None
+
+    out = defaultdict(list)
+    for k in keys:
+        scope = f"{k.zone}#{k.key_tag}#{k.role}"
+        snap = db.get_snapshot("key_file", scope) or {}
+        timings = snap.get("timings", {}) or {}
+        for field in _SCHEDULED_KEY_TIMINGS:
+            dt = _parse(timings.get(field))
+            if dt is None:
+                continue
+            out[dt.date()].append(f"{k.role} tag {k.key_tag}: {field}")
+    return dict(out)
+
+
 def _load_css() -> str:
     css_path = Path(__file__).parent.parent / "web" / "static" / "app.css"
     try:
@@ -73,7 +115,14 @@ def _build_report_context(
 
     timeline_svg = render_state_timeline(events, keys)
     rndc_svg = render_rndc_timeline(events, keys)
-    calendar_html = render_calendar(events, from_ts, to_ts)
+    # Scheduled DNSSEC transition dates from each key's K*.key header,
+    # surfaced on the calendar as hollow markers so upcoming Publish /
+    # Activate / Inactive / Delete / SyncPublish transitions are
+    # visible alongside observed events.
+    scheduled_dates = _scheduled_dates_for_keys(db, keys)
+    calendar_html = render_calendar(
+        events, from_ts, to_ts, scheduled_dates=scheduled_dates
+    )
     dns_timeline_svg = render_event_timeline(
         dns_channel(events), from_ts, to_ts
     )
@@ -82,13 +131,20 @@ def _build_report_context(
     )
     # Rollover view: the whole story of this zone's keys on a time
     # axis, grouped by (role, algorithm). Pulls phase boundaries from
-    # each key's state_file snapshot so the report captures the exact
-    # Published/Active/Retired/Removed timestamps at render time.
-    rollover_snapshots = {
-        f"{zone}#{k.key_tag}#{k.role}":
-            db.get_snapshot("state_file", f"{zone}#{k.key_tag}#{k.role}") or {}
-        for k in keys
-    }
+    # both the state_file snapshot (actual transitions) and the
+    # key_file snapshot (scheduled Created/Publish/Activate/Inactive/
+    # Delete times from the K*.key header) so a key whose scheduled
+    # Delete has already passed renders as "past-deletion-date"
+    # instead of collapsing into an unbounded "pre-publication".
+    rollover_snapshots = {}
+    for k in keys:
+        scope = f"{zone}#{k.key_tag}#{k.role}"
+        state_snap = db.get_snapshot("state_file", scope) or {}
+        key_snap = db.get_snapshot("key_file", scope) or {}
+        rollover_snapshots[scope] = {
+            "fields": state_snap.get("fields", {}) or {},
+            "timings": key_snap.get("timings", {}) or {},
+        }
     rollover_svg = render_rollover_view(
         events, keys, rollover_snapshots, from_ts=from_ts, to_ts=to_ts
     )

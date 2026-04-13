@@ -175,3 +175,9 @@ Can the event log view on the zones page update live.  It's a little clunky to s
 
 ---
 
+## 2026-04-12 19:45:00
+
+The system is marking keys that are past their deleted time as 'pre-publication'.    Make sure the system accounts for all dnssec timing data in the key file header (Created, publish, activate, inactive, delete, syncpublish.  The system should capture all these times the first time they are observed and retroactively set them on the calendar as 'scheduled times'.  Those may change as state file changes and I believe those are already captured.  Importantly keys past deleted or between Inactive and Delete should be marked as 'Past Deletion Date' and 'To Be Deleted' respectively
+
+---
+

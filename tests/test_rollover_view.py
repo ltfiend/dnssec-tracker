@@ -124,9 +124,11 @@ def test_ksk_rollover_scenario():
     # Algorithm group header.
     assert "alg 13" in svg
 
-    # Phase tooltips / class markers.
+    # Phase tooltips / class markers. The old "retired" phase was
+    # renamed to "to-be-deleted" to reflect BIND's Inactive→Delete
+    # semantic ("not signing, awaiting removal").
     assert "phase-active" in svg
-    assert "phase-retired" in svg
+    assert "phase-to-be-deleted" in svg
 
     # DS overlay — both keys have DS events so two live stripes are emitted.
     assert svg.count('data-ds="live"') >= 2
@@ -135,7 +137,7 @@ def test_ksk_rollover_scenario():
 
     # Tooltip copy includes the phase names so mouseover is useful.
     assert "active" in svg
-    assert "retired" in svg
+    assert "to-be-deleted" in svg or "to be deleted" in svg
 
 
 # --------------------------------------------------------------------------
@@ -197,8 +199,13 @@ def test_empty_inputs_returns_placeholder_svg():
     assert "No keys observed" in svg
 
 
-def test_window_with_no_activity_returns_placeholder():
-    """A key exists but its segments all fall outside the window."""
+def test_key_whose_delete_preceded_window_renders_as_past_deletion_date():
+    """A key whose entire scheduled lifecycle fell before the reported
+    window now renders as ``past-deletion-date`` spanning the window
+    — the user needs to see that the key is overdue for removal even
+    if the actual Delete timestamp is old. Previously this rendered a
+    "No key activity" placeholder, which hid the problem.
+    """
     k = _ksk(11111)
     snap = _snap(
         generated="20200101000000",
@@ -218,7 +225,9 @@ def test_window_with_no_activity_returns_placeholder():
     )
     assert "<svg" in svg
     assert "</svg>" in svg
-    assert "No key activity" in svg
+    # No placeholder — the past-deletion-date segment fills the window.
+    assert "No key activity" not in svg
+    assert "phase-past-deletion-date" in svg
 
 
 # --------------------------------------------------------------------------
@@ -290,8 +299,11 @@ def test_phase_segments_for_canonical_ksk_snapshot():
 
 def test_phase_segments_for_fully_retired_key():
     """All five boundary timestamps set — full lifecycle in the
-    window. The ``removed`` boundary is a terminal marker so there
-    should be exactly four segments."""
+    window. The ``past-deletion-date`` phase now *renders* (it used
+    to be a silent terminal marker), so a key whose Delete has
+    passed shows a muted bar out to the window edge — the operator
+    can see "this key is past its scheduled removal".
+    """
     k = _ksk(55555)
     snap = _snap(
         generated="20260301000000",
@@ -305,11 +317,21 @@ def test_phase_segments_for_fully_retired_key():
 
     segs = _phase_segments_for_key(k, snap, [], window_start, window_end)
     phases = [p for _, _, p in segs]
-    assert phases == ["pre-publication", "published", "active", "retired"]
-    # Retired segment runs Retired -> Removed, and nothing is emitted
-    # past Removed so the bar truly stops there.
-    assert segs[-1][0] == datetime(2026, 3, 20, tzinfo=timezone.utc)
-    assert segs[-1][1] == datetime(2026, 3, 25, tzinfo=timezone.utc)
+    assert phases == [
+        "pre-publication",
+        "published",
+        "active",
+        "to-be-deleted",
+        "past-deletion-date",
+    ]
+    # to-be-deleted runs Inactive -> Delete
+    to_be_deleted = segs[-2]
+    assert to_be_deleted[0] == datetime(2026, 3, 20, tzinfo=timezone.utc)
+    assert to_be_deleted[1] == datetime(2026, 3, 25, tzinfo=timezone.utc)
+    # past-deletion-date extends from Delete to the window edge
+    past = segs[-1]
+    assert past[0] == datetime(2026, 3, 25, tzinfo=timezone.utc)
+    assert past[1] == window_end
 
 
 # --------------------------------------------------------------------------
@@ -404,3 +426,144 @@ def test_ksk_and_zsk_not_considered_an_algorithm_rollover():
     assert 'class="algo-rollover"' not in svg
     assert "alg 13" in svg
     assert "alg 15" in svg
+
+
+# --------------------------------------------------------------------------
+# 11. Key-file scheduled timings fall back when state-file is unset.
+#
+# Regression test for the bug where a key whose state_file has every
+# field zeroed except `Generated` but whose K*.key header has the full
+# scheduled lifecycle would render as an unbounded `pre-publication`
+# bar — even when the scheduled Delete was in the past.
+# --------------------------------------------------------------------------
+
+def _snap_with_timings(
+    generated: str = "0",
+    published: str = "0",
+    active: str = "0",
+    retired: str = "0",
+    removed: str = "0",
+    *,
+    created: str = "0",
+    publish: str = "0",
+    activate: str = "0",
+    inactive: str = "0",
+    delete: str = "0",
+) -> dict:
+    return {
+        "fields": {
+            "Generated": generated,
+            "Published": published,
+            "Active": active,
+            "Retired": retired,
+            "Removed": removed,
+            "GoalState": "omnipresent",
+        },
+        "timings": {
+            "Created": created,
+            "Publish": publish,
+            "Activate": activate,
+            "Inactive": inactive,
+            "Delete": delete,
+        },
+    }
+
+
+def test_phase_segments_fall_back_to_key_file_scheduled_timings():
+    """State file has only Generated set — Published/Active/Retired/
+    Removed are all ``0`` — but the K*.key header has the full scheduled
+    lifecycle. The helper must use the scheduled key-file values so
+    every phase boundary is present.
+    """
+    k = _ksk(66666)
+    snap = _snap_with_timings(
+        # state file only knows when the key was generated…
+        generated="20260228000000",
+        # …everything else on the state-file side is still zero.
+        # The key file carries the full scheduled lifecycle:
+        created="20260228000000",
+        publish="20260301000000",
+        activate="20260307000000",
+        inactive="20260601000000",
+        delete="20260608000000",
+    )
+    window_start = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    window_end = datetime(2026, 7, 15, tzinfo=timezone.utc)
+
+    segs = _phase_segments_for_key(k, snap, [], window_start, window_end)
+    phases = [p for _, _, p in segs]
+    assert phases == [
+        "pre-publication",
+        "published",
+        "active",
+        "to-be-deleted",
+        "past-deletion-date",
+    ]
+
+
+def test_post_delete_key_renders_as_past_deletion_date_not_pre_publication():
+    """The specific user-reported bug: a key whose scheduled Delete is
+    in the past was rendering as a long ``pre-publication`` bar because
+    the state file hadn't caught up. With key-file fallback the final
+    phase is ``past-deletion-date`` extending to window_end.
+    """
+    k = _ksk(77777)
+    # state file only knows Generated; everything else is still 0.
+    # key file's schedule has Delete well in the past relative to the
+    # render window's end.
+    snap = _snap_with_timings(
+        generated="20250101000000",
+        created="20250101000000",
+        publish="20250101000000",
+        activate="20250107000000",
+        inactive="20250601000000",
+        delete="20250608000000",
+    )
+    window_start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    window_end = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    segs = _phase_segments_for_key(k, snap, [], window_start, window_end)
+    phases = [p for _, _, p in segs]
+    # Crucially, the LAST phase must be past-deletion-date, NOT
+    # pre-publication (which was the bug).
+    assert phases[-1] == "past-deletion-date"
+    # And that phase must extend from the scheduled Delete to window_end.
+    last = segs[-1]
+    assert last[0] == datetime(2025, 6, 8, tzinfo=timezone.utc)
+    assert last[1] == window_end
+
+
+def test_state_file_overrides_key_file_when_both_set():
+    """If both snapshots have a value for the same boundary, state_file
+    wins — it records what actually happened, not what was scheduled.
+    """
+    k = _ksk(88888)
+    # state_file says Active fired on 2026-03-15
+    # key_file schedule said it was planned for 2026-03-10
+    # The rendered "active" phase should begin on 2026-03-15 (actual).
+    snap = {
+        "fields": {
+            "Generated": "20260301000000",
+            "Published": "20260302000000",
+            "Active":    "20260315000000",   # actual
+            "Retired":   "0",
+            "Removed":   "0",
+            "GoalState": "omnipresent",
+        },
+        "timings": {
+            "Created":  "20260301000000",
+            "Publish":  "20260302000000",
+            "Activate": "20260310000000",    # scheduled earlier — ignored
+            "Inactive": "0",
+            "Delete":   "0",
+        },
+    }
+    window_start = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    window_end = datetime(2026, 4, 15, tzinfo=timezone.utc)
+    segs = _phase_segments_for_key(k, snap, [], window_start, window_end)
+
+    # Find the "active" segment — its start must match the state_file
+    # value (15th), not the key_file scheduled value (10th).
+    active = [s for s in segs if s[2] == "active"]
+    assert len(active) == 1
+    assert active[0][0] == datetime(2026, 3, 15, tzinfo=timezone.utc)

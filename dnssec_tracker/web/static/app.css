@@ -394,11 +394,28 @@ table th { background: var(--surface-alt); font-weight: 600; }
   display: flex;
   gap: 2px;
   justify-content: flex-start;
+  align-items: center;
   position: absolute;
   left: 3px;
   bottom: 2px;
 }
 .cal-dots .cal-dot { width: 6px; height: 6px; }
+/* Scheduled marker: hollow outlined square so it reads as "this
+ * hasn't happened yet, it's on the calendar" next to the solid
+ * source dots for observed events. */
+.cal-scheduled-marker {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border: 1.5px solid var(--accent);
+  border-radius: 1px;
+  background: transparent;
+  box-sizing: border-box;
+}
+.cal-legend-item .cal-scheduled-marker { width: 8px; height: 8px; }
+.cal-month td.has-scheduled.cal-cell:not(.has-events) {
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+}
 
 /* ---- Event timeline chart -------------------------------------- */
 .event-timeline {

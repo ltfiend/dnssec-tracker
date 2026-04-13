@@ -26,6 +26,49 @@ from ..render.timeline_svg import render_state_timeline
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+# Timings from the K*.key header we want to surface as scheduled
+# markers on the calendar. Created is a historical timestamp (when the
+# key was generated), so it's excluded — the calendar's scheduled
+# overlay is specifically for *upcoming* transitions.
+_SCHEDULED_KEY_TIMINGS = (
+    "Publish", "Activate", "Inactive", "Delete", "SyncPublish", "SyncDelete",
+)
+
+
+def _scheduled_dates_for_keys(db: Database, keys) -> dict:
+    """Walk every key's ``key_file`` snapshot and return a
+    ``{date: [description, ...]}`` mapping suitable for
+    ``render_calendar(..., scheduled_dates=...)``.
+    """
+    from collections import defaultdict
+    from datetime import datetime as _dt
+
+    def _parse(ts):
+        if not ts or ts == "0":
+            return None
+        s = str(ts).strip()
+        if len(s) != 14 or not s.isdigit():
+            return None
+        try:
+            return _dt(
+                int(s[0:4]), int(s[4:6]), int(s[6:8]),
+                int(s[8:10]), int(s[10:12]), int(s[12:14]),
+            )
+        except ValueError:
+            return None
+
+    out = defaultdict(list)
+    for k in keys:
+        scope = f"{k.zone}#{k.key_tag}#{k.role}"
+        snap = db.get_snapshot("key_file", scope) or {}
+        timings = snap.get("timings", {}) or {}
+        for field in _SCHEDULED_KEY_TIMINGS:
+            dt = _parse(timings.get(field))
+            if dt is None:
+                continue
+            out[dt.date()].append(f"{k.role} tag {k.key_tag}: {field}")
+    return dict(out)
+
 
 def _expand_date(value: str | None, *, end: bool) -> str | None:
     """Turn a ``YYYY-MM-DD`` from the HTML5 date picker into a full
@@ -85,17 +128,25 @@ def build_router(db: Database, config: Config) -> APIRouter:
         # DNS (dns_probe + rndc_status) and File (state_file + key_file).
         dns_timeline_svg = render_event_timeline(dns_channel(events))
         file_timeline_svg = render_event_timeline(file_channel(events))
-        calendar_html = render_calendar(events)
-        # Rollover view — fetch each key's state_file snapshot so the
-        # renderer can pull phase boundaries from BIND's Published/
-        # Active/Retired/Removed timestamps. Snapshots are keyed by
-        # "zone#tag#role" (the role comes from the Key object so CSKs
-        # look up under "#CSK").
-        snapshots = {
-            f"{k.zone}#{k.key_tag}#{k.role}":
-                db.get_snapshot("state_file", f"{k.zone}#{k.key_tag}#{k.role}") or {}
-            for k in keys
-        }
+        scheduled = _scheduled_dates_for_keys(db, keys)
+        calendar_html = render_calendar(events, scheduled_dates=scheduled)
+        # Rollover view — fetch both the state_file snapshot (actual
+        # transitions that have already happened) and the key_file
+        # snapshot (scheduled Created/Publish/Activate/Inactive/Delete
+        # times iodyn wrote into the K*.key header). The renderer
+        # prefers state_file values when set and falls back to the
+        # scheduled key_file values so a key whose Delete time has
+        # already passed renders as "past-deletion-date" instead of
+        # collapsing into an unbounded "pre-publication".
+        snapshots = {}
+        for k in keys:
+            scope = f"{k.zone}#{k.key_tag}#{k.role}"
+            state_snap = db.get_snapshot("state_file", scope) or {}
+            key_snap = db.get_snapshot("key_file", scope) or {}
+            snapshots[scope] = {
+                "fields": state_snap.get("fields", {}) or {},
+                "timings": key_snap.get("timings", {}) or {},
+            }
         rollover_svg = render_rollover_view(events, keys, snapshots)
         return render(
             "zone.html",
@@ -168,19 +219,24 @@ def build_router(db: Database, config: Config) -> APIRouter:
             if e.event_type in ("key_timing_changed", "state_timing_changed")
         ]
 
-        calendar_html = render_calendar(events)
+        scheduled = _scheduled_dates_for_keys(db, keys)
+        calendar_html = render_calendar(events, scheduled_dates=scheduled)
         dns_timeline_svg = render_event_timeline(dns_channel(events))
         file_timeline_svg = render_event_timeline(file_channel(events))
-        # Rollover view scoped to just this key tag. Reuse the same
-        # snapshots dict shape the renderer expects — one entry per
-        # (role) instance of this tag (there may be more than one if
-        # the zone is mid-rollover with a KSK + ZSK sharing a tag, or
-        # if CSK/ZSK overlap).
-        snapshots = {
-            f"{k.zone}#{k.key_tag}#{k.role}":
-                db.get_snapshot("state_file", f"{k.zone}#{k.key_tag}#{k.role}") or {}
-            for k in keys
-        }
+        # Rollover view scoped to just this key tag. Combine state_file
+        # (actual transitions) and key_file (scheduled timings) for the
+        # same reason as zone_detail — the scheduled times from the
+        # K*.key file fill in phase boundaries the state file hasn't
+        # caught up to yet.
+        snapshots = {}
+        for k in keys:
+            scope = f"{k.zone}#{k.key_tag}#{k.role}"
+            state_snap = db.get_snapshot("state_file", scope) or {}
+            key_snap = db.get_snapshot("key_file", scope) or {}
+            snapshots[scope] = {
+                "fields": state_snap.get("fields", {}) or {},
+                "timings": key_snap.get("timings", {}) or {},
+            }
         rollover_svg = render_rollover_view(events, keys, snapshots)
 
         return render(
