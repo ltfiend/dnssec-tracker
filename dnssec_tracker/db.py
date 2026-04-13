@@ -291,6 +291,38 @@ class Database:
                 (collector, scope, json.dumps(snapshot, sort_keys=True, default=str), now_iso()),
             )
 
+    def list_snapshot_scopes(self, collector: str) -> list[str]:
+        """Return every ``scope`` stored under ``collector`` in
+        ``collector_state``. Used by the file-collector vanish
+        detection: any scope that exists here but isn't in the
+        current scan indicates a key whose on-disk files have been
+        removed."""
+        with self.cursor() as c:
+            rows = c.execute(
+                "SELECT scope FROM collector_state WHERE collector=?",
+                (collector,),
+            ).fetchall()
+        return [r["scope"] for r in rows]
+
+    def delete_snapshot(self, collector: str, scope: str) -> None:
+        with self.cursor() as c:
+            c.execute(
+                "DELETE FROM collector_state WHERE collector=? AND scope=?",
+                (collector, scope),
+            )
+
+    # ---- key cleanup ------------------------------------------------
+
+    def delete_key(self, zone: str, key_tag: int, role: str) -> None:
+        """Remove a key row from the ``keys`` table. Events that
+        reference the key by ``key_tag`` stay untouched so the
+        historical event log still renders the metadata."""
+        with self.cursor() as c:
+            c.execute(
+                "DELETE FROM keys WHERE zone=? AND key_tag=? AND role=?",
+                (zone, key_tag, role),
+            )
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()
