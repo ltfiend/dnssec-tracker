@@ -18,6 +18,12 @@ class Config:
     syslog_path: Path | None
     named_log_path: Path | None
     db_path: Path
+    # Scan recursion for the K*.key / K*.state sweeps. Default
+    # False (scan root + one-level-down only) so a backup or
+    # holding subdirectory like ``keys/.bak/<zone>/`` doesn't leak
+    # stale keys into the live zone's view. Flip to True for
+    # deeper layouts.
+    key_dir_recursive: bool = False
 
     # dns
     local_resolver: str = "127.0.0.1:53"
@@ -77,6 +83,8 @@ def load_config(path: Path) -> Config:
         syslog_path=optional_path(paths, "syslog"),
         named_log_path=optional_path(paths, "named_log"),
         db_path=Path(paths.get("db", "/var/lib/dnssec-tracker/events.db")),
+        key_dir_recursive=_bool(paths.get("key_dir_recursive", "no"))
+            if paths else False,
         local_resolver=dns.get("local_resolver", "127.0.0.1:53") if dns else "127.0.0.1:53",
         query_interval=int(dns.get("query_interval", "60")) if dns else 60,
         parent_interval=int(dns.get("parent_interval", "300")) if dns else 300,

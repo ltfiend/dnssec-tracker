@@ -143,13 +143,22 @@ def _role_from_fields(fields: dict[str, str]) -> str:
     return "UNKNOWN"
 
 
-def scan_state_files(root: Path) -> list[StateFile]:
-    """Walk *root* and return every parsed ``.state`` file found."""
+def scan_state_files(root: Path, *, recursive: bool = False) -> list[StateFile]:
+    """Walk *root* and return every parsed ``.state`` file found.
+
+    Non-recursive by default — scans ``root`` and immediate
+    subdirectories, which covers both flat (``keys/K*.state``) and
+    per-zone-subdir (``keys/<zone>/K*.state``) BIND layouts without
+    picking up deeper backup/holding trees (``keys/.bak/...``).
+    Flip ``recursive=True`` if your tree genuinely nests deeper.
+    """
+
+    from ._scan import iter_key_paths
 
     results: list[StateFile] = []
     if not root.exists():
         return results
-    for path in root.rglob("K*.state"):
+    for path in iter_key_paths(root, "K*.state", recursive=recursive):
         sf = parse_state_file(path)
         if sf is not None:
             results.append(sf)

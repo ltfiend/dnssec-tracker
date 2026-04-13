@@ -12,7 +12,10 @@ class KeyFileCollector(Collector):
     interval = 30.0
 
     async def sample(self) -> None:
-        files = scan_key_files(self.config.key_dir)
+        files = scan_key_files(
+            self.config.key_dir,
+            recursive=self.config.key_dir_recursive,
+        )
         for kf in files:
             scope = f"{kf.zone}#{kf.key_tag}#{kf.role}"
             self.db.upsert_zone(

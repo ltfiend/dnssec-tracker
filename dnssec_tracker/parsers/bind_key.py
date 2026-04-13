@@ -117,11 +117,19 @@ def parse_key_file(path: Path) -> KeyFile | None:
     )
 
 
-def scan_key_files(root: Path) -> list[KeyFile]:
+def scan_key_files(root: Path, *, recursive: bool = False) -> list[KeyFile]:
+    """Walk *root* and return every parsed ``K*.key`` file found.
+
+    Non-recursive by default; see :func:`scan_state_files` for the
+    rationale and the layouts handled by the default walk.
+    """
+
+    from ._scan import iter_key_paths
+
     results: list[KeyFile] = []
     if not root.exists():
         return results
-    for path in root.rglob("K*.key"):
+    for path in iter_key_paths(root, "K*.key", recursive=recursive):
         kf = parse_key_file(path)
         if kf is not None:
             results.append(kf)

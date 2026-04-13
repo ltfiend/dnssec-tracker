@@ -38,12 +38,16 @@ class StateFileCollector(Collector):
         return f"{sf.zone}#{sf.key_tag}#{sf.role}"
 
     async def sample(self) -> None:
-        files = scan_state_files(self.config.key_dir)
+        files = scan_state_files(
+            self.config.key_dir,
+            recursive=self.config.key_dir_recursive,
+        )
         if not self._logged_discovery:
             zones_found = sorted({sf.zone for sf in files})
             log.info(
-                "state_file first scan of %s (recursive): %d file(s) across %d zone(s): %s",
+                "state_file first scan of %s (%s): %d file(s) across %d zone(s): %s",
                 self.config.key_dir,
+                "recursive" if self.config.key_dir_recursive else "non-recursive",
                 len(files),
                 len(zones_found),
                 ", ".join(zones_found) if zones_found else "(none)",
