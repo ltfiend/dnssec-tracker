@@ -5,6 +5,17 @@
 <h2>{{ zone }} — key {{ tag }}</h2>
 <p><a href="/zones/{{ zone }}">&larr; back to zone</a></p>
 
+{% if overdue_assessments %}
+<div class="warning-banner" role="alert">
+  <strong>This key is past its scheduled Delete but still observed:</strong>
+  <ul>
+    {% for a in overdue_assessments %}
+    <li>{{ a.summary() }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 <form method="get" action="/zones/{{ zone }}/keys/{{ tag }}#event-log" class="filters">
   <label>
     Role

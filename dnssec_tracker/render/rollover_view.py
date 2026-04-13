@@ -386,6 +386,7 @@ def render_rollover_view(
     from_ts: str | None = None,
     to_ts: str | None = None,
     today: datetime | None = None,
+    overdue_by_tag: dict[int, "OverdueState"] | None = None,
 ) -> str:
     """Render the rollover-story SVG fragment.
 
@@ -674,32 +675,80 @@ def render_rollover_view(
                 f'fill-opacity="0.4"/>'
             )
 
+            # Lookup overdue state for this key tag (if any). Only
+            # "past-deletion-date" segments get the lingering
+            # treatment — earlier phases render as normal even if the
+            # key will eventually end up overdue.
+            overdue_state = None
+            if overdue_by_tag is not None:
+                overdue_state = overdue_by_tag.get(k.key_tag)
+
             segs = per_key_segments[(k.zone, k.key_tag, k.role)]
             for t0, t1, name in segs:
                 x0 = x_for(t0)
                 x1 = x_for(t1)
                 w = max(1.0, x1 - x0)
-                fill = PHASE_FILL.get(name, "#c8c8c8")
+
+                is_lingering = (
+                    name == "past-deletion-date"
+                    and overdue_state is not None
+                    and overdue_state.value != "none"
+                )
+
+                if is_lingering:
+                    # Alarming bright red for keys that are past
+                    # scheduled Delete but still visibly present at
+                    # the zone or the parent. Higher opacity and a
+                    # bold stroke so this reads from across the room.
+                    fill = "#c43030"
+                    extra_attrs = (
+                        ' class="phase phase-past-deletion-date phase-lingering"'
+                        f' data-phase="past-deletion-date"'
+                        f' data-lingering="{overdue_state.value}"'
+                    )
+                    fill_opacity = "0.92"
+                    stroke = "#7a1010"
+                    stroke_width = "1.2"
+                    phase_label = "OVERDUE: still published"
+                    tip_tail = (
+                        f"\nLINGERING: {overdue_state.value.replace('_', ' ')} "
+                        f"— key should have been removed by "
+                        f"{t0.strftime('%Y-%m-%d %H:%M')}"
+                    )
+                else:
+                    fill = PHASE_FILL.get(name, "#c8c8c8")
+                    extra_attrs = (
+                        f' class="phase phase-{name}" data-phase="{name}"'
+                    )
+                    fill_opacity = "0.85"
+                    stroke = "currentColor"
+                    stroke_width = "0.4"
+                    phase_label = PHASE_LABEL.get(name, name)
+                    tip_tail = ""
+
                 tip = (
                     f"{k.role} tag {k.key_tag} alg {k.algorithm} \u2014 {name}\n"
                     f"{PHASE_DESCRIPTION.get(name, '')}\n"
-                    f"{t0.strftime('%Y-%m-%d %H:%M')} \u2192 {t1.strftime('%Y-%m-%d %H:%M')} UTC"
+                    f"{t0.strftime('%Y-%m-%d %H:%M')} \u2192 "
+                    f"{t1.strftime('%Y-%m-%d %H:%M')} UTC"
+                    + tip_tail
                 )
                 parts.append(
-                    f'<rect class="phase phase-{name}" data-phase="{name}" '
+                    f'<rect{extra_attrs} '
                     f'x="{x0:.1f}" y="{bar_y}" width="{w:.1f}" height="{bar_h}" '
-                    f'fill="{fill}" fill-opacity="0.85" '
-                    f'stroke="currentColor" stroke-opacity="0.35" stroke-width="0.4">'
+                    f'fill="{fill}" fill-opacity="{fill_opacity}" '
+                    f'stroke="{stroke}" stroke-opacity="0.9" '
+                    f'stroke-width="{stroke_width}">'
                     f'<title>{escape(tip)}</title></rect>'
                 )
                 # Short inline label if the segment is wide enough.
-                # Use the human-readable form from PHASE_LABEL so
-                # "to-be-deleted" renders as "to be deleted" etc.
                 if w > 44:
+                    weight_attr = ' font-weight="700"' if is_lingering else ""
+                    label_fill = "#ffeaea" if is_lingering else "currentColor"
                     parts.append(
                         f'<text x="{x0 + 4:.1f}" y="{bar_y + bar_h - 8:.1f}" '
-                        f'fill="currentColor" fill-opacity="0.9" font-size="9">'
-                        f'{escape(PHASE_LABEL.get(name, name))}</text>'
+                        f'fill="{label_fill}" fill-opacity="0.95" font-size="9"'
+                        f'{weight_attr}>{escape(phase_label)}</text>'
                     )
 
             # DS overlay stripe for KSK / CSK rows. The stripe always

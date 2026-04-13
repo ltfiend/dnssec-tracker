@@ -34,6 +34,17 @@
   </div>
   {% endif %}
 
+  {% if overdue_assessments %}
+  <div class="warning-banner">
+    <strong>{{ overdue_assessments|length }} key(s) past scheduled Delete but still observed:</strong>
+    <ul>
+      {% for a in overdue_assessments %}
+      <li>{{ a.summary() }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
   <section class="summary">
     <h2>Summary</h2>
     <p>{{ executive_summary }}</p>

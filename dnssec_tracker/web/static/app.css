@@ -300,6 +300,31 @@ table th { background: var(--surface-alt); font-weight: 600; }
   margin: 0 0 1rem;
   border-radius: 3px;
 }
+
+/* Warning banner for overdue keys (past scheduled Delete but still
+ * published at the zone or DS still at the parent). Hard-coded red
+ * variants because the palette has no dedicated "warning" colour and
+ * this needs to read *alarming* on every background — dark UI, light
+ * UI, and the always-light report body. */
+.warning-banner {
+  background: color-mix(in srgb, #c43030 12%, var(--surface));
+  border: 1px solid #c43030;
+  border-left: 4px solid #c43030;
+  padding: 0.6rem 0.9rem;
+  margin: 0 0 1rem;
+  border-radius: 3px;
+  color: var(--fg);
+}
+.warning-banner strong { color: #c43030; }
+.warning-banner ul { margin: 0.35rem 0 0.35rem; padding-left: 1.2rem; }
+.warning-banner li { margin: 0.1rem 0; font-size: 0.9rem; }
+.warning-banner a { color: #c43030; font-weight: 600; }
+.warning-banner p.meta { margin: 0.35rem 0 0; font-size: 0.82rem; color: var(--muted); }
+/* Pin the report variant to a light-palette-safe form since the
+ * report body (.report) forces color-scheme: light regardless of
+ * the UI theme. */
+.report .warning-banner { color: #1b1d22; background: #fbe8e8; }
+.report .warning-banner p.meta { color: #6a707b; }
 .timeline {
   overflow-x: auto;
   background: var(--surface);

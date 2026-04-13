@@ -8,6 +8,24 @@
   Tracked since {{ zone.first_seen }}, last observation {{ zone.last_seen }}
 </p>
 
+{% if overdue_assessments %}
+<div class="warning-banner" role="alert">
+  <strong>{{ overdue_assessments|length }} key(s) past scheduled Delete but still observed:</strong>
+  <ul>
+    {% for a in overdue_assessments %}
+    <li>
+      <a href="/zones/{{ zone.name }}/keys/{{ a.key.key_tag }}">{{ a.summary() }}</a>
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="meta">
+    These keys should already be removed but the tracker is still observing
+    them at the zone apex or in the parent delegation. See the rollover view
+    below — their post-Delete segments are drawn in bright red.
+  </p>
+</div>
+{% endif %}
+
 <p>
   <a class="action" href="/zones/{{ zone.name }}/report.html{% if filterset and filterset.is_active() %}?{% if hide_types %}hide_types={{ hide_types }}&{% endif %}{% if hide_sources %}hide_sources={{ hide_sources }}&{% endif %}{% if role and role != 'all' %}role={{ role }}{% endif %}{% endif %}">Export HTML report</a>
   <a class="action" href="/zones/{{ zone.name }}/report.pdf{% if filterset and filterset.is_active() %}?{% if hide_types %}hide_types={{ hide_types }}&{% endif %}{% if hide_sources %}hide_sources={{ hide_sources }}&{% endif %}{% if role and role != 'all' %}role={{ role }}{% endif %}{% endif %}">Export PDF report</a>

@@ -18,6 +18,7 @@ from .calendar import render_calendar
 from .channels import dns_channel, file_channel
 from .event_timeline import render_event_timeline
 from .filtering import FilterSet, filter_events
+from .overdue import assess_all
 from .rollover_view import render_rollover_view
 from .templating import create_env
 from .timeline_svg import render_rndc_timeline, render_state_timeline
@@ -145,8 +146,21 @@ def _build_report_context(
             "fields": state_snap.get("fields", {}) or {},
             "timings": key_snap.get("timings", {}) or {},
         }
+    # Overdue assessment — same logic as the live route. Keys whose
+    # scheduled Delete has passed but which are still visible at the
+    # zone or the parent get a high-contrast fill on their rollover
+    # bar and a summary entry in the report's warning banner.
+    zone_dns_snap = db.get_snapshot("dns_probe", f"zone:{zone}") or {}
+    parent_dns_snap = db.get_snapshot("dns_probe", f"parent:{zone}") or {}
+    overdue_assessments = assess_all(
+        keys, rollover_snapshots, zone_dns_snap, parent_dns_snap,
+    )
+    overdue_active = [a for a in overdue_assessments if a.is_overdue]
+    overdue_by_tag = {a.key.key_tag: a.state for a in overdue_active}
+
     rollover_svg = render_rollover_view(
-        events, keys, rollover_snapshots, from_ts=from_ts, to_ts=to_ts
+        events, keys, rollover_snapshots, from_ts=from_ts, to_ts=to_ts,
+        overdue_by_tag=overdue_by_tag,
     )
 
     # Per-key current timing snapshots (Created/Publish/Activate/…
@@ -196,6 +210,7 @@ def _build_report_context(
         "dns_timeline_svg": dns_timeline_svg,
         "file_timeline_svg": file_timeline_svg,
         "rollover_svg": rollover_svg,
+        "overdue_assessments": overdue_active,
         "per_key_blocks": per_key_blocks,
         "dns_observations": dns_observations,
         "state_snapshots": state_snapshots,

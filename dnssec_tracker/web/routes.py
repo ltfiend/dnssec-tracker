@@ -18,6 +18,7 @@ from ..render.channels import dns_channel, file_channel
 from ..render.event_timeline import render_event_timeline
 from ..render.filtering import FilterSet, filter_events
 from ..render.html_export import render_report_html
+from ..render.overdue import assess_all
 from ..render.pdf_export import render_report_pdf
 from ..render.rollover_view import render_rollover_view
 from ..render.templating import create_env
@@ -147,7 +148,24 @@ def build_router(db: Database, config: Config) -> APIRouter:
                 "fields": state_snap.get("fields", {}) or {},
                 "timings": key_snap.get("timings", {}) or {},
             }
-        rollover_svg = render_rollover_view(events, keys, snapshots)
+        # Assess keys whose scheduled Delete has passed but whose
+        # DNSKEY is still at the zone or whose DS is still at the
+        # parent. The last observed dns_probe snapshots give us the
+        # current state of the world; the per-key snapshots carry the
+        # scheduled Delete time. Overdue keys trigger both a red
+        # warning banner at the top of the page and a high-contrast
+        # fill on the rollover view's past-deletion-date segment.
+        zone_dns_snap = db.get_snapshot("dns_probe", f"zone:{z.name}") or {}
+        parent_dns_snap = db.get_snapshot("dns_probe", f"parent:{z.name}") or {}
+        overdue_assessments = assess_all(
+            keys, snapshots, zone_dns_snap, parent_dns_snap,
+        )
+        overdue_by_tag = {
+            a.key.key_tag: a.state for a in overdue_assessments if a.is_overdue
+        }
+        rollover_svg = render_rollover_view(
+            events, keys, snapshots, overdue_by_tag=overdue_by_tag,
+        )
         return render(
             "zone.html",
             zone=z,
@@ -158,6 +176,7 @@ def build_router(db: Database, config: Config) -> APIRouter:
             dns_timeline_svg=dns_timeline_svg,
             file_timeline_svg=file_timeline_svg,
             rollover_svg=rollover_svg,
+            overdue_assessments=[a for a in overdue_assessments if a.is_overdue],
             filterset=fs,
             hide_types=hide_types or "",
             hide_sources=hide_sources or "",
@@ -237,7 +256,17 @@ def build_router(db: Database, config: Config) -> APIRouter:
                 "fields": state_snap.get("fields", {}) or {},
                 "timings": key_snap.get("timings", {}) or {},
             }
-        rollover_svg = render_rollover_view(events, keys, snapshots)
+        zone_dns_snap = db.get_snapshot("dns_probe", f"zone:{zone}") or {}
+        parent_dns_snap = db.get_snapshot("dns_probe", f"parent:{zone}") or {}
+        overdue_assessments = assess_all(
+            keys, snapshots, zone_dns_snap, parent_dns_snap,
+        )
+        overdue_by_tag = {
+            a.key.key_tag: a.state for a in overdue_assessments if a.is_overdue
+        }
+        rollover_svg = render_rollover_view(
+            events, keys, snapshots, overdue_by_tag=overdue_by_tag,
+        )
 
         return render(
             "key.html",
@@ -250,6 +279,7 @@ def build_router(db: Database, config: Config) -> APIRouter:
             dns_timeline_svg=dns_timeline_svg,
             file_timeline_svg=file_timeline_svg,
             rollover_svg=rollover_svg,
+            overdue_assessments=[a for a in overdue_assessments if a.is_overdue],
             filterset=fs,
             hide_types=hide_types or "",
             hide_sources=hide_sources or "",

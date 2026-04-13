@@ -181,3 +181,15 @@ The system is marking keys that are past their deleted time as 'pre-publication'
 
 ---
 
+## 2026-04-12 20:24:10
+
+Let's merge this branch into main.  I think what we are dealing with now are general bug fixes.   The visuals look pretty good
+
+---
+
+## 2026-04-12 20:25:02
+
+Next we need to deal with the corner case of a key that is past it's deletion date but is still published and/or has a DS published.
+
+---
+
