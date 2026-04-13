@@ -193,3 +193,9 @@ Next we need to deal with the corner case of a key that is past it's deletion da
 
 ---
 
+## 2026-04-12 20:37:20
+
+Let's fix the calendars a bit.  They are showing years back but none of the previous dates have dots representing events.  Add dots and restrict calendars to only previous month, this month, next month and make that scrollable (left / right for earlier / later)
+
+---
+

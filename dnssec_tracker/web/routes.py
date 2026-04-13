@@ -36,6 +36,38 @@ _SCHEDULED_KEY_TIMINGS = (
 )
 
 
+_CAL_CENTER_RE = re.compile(r"^(\d{4})-(\d{2})$")
+
+
+def _calendar_scroll(raw: str | None):
+    """Parse a ``cal_center=YYYY-MM`` query param into a
+    ``(center_date, prev_center, next_center)`` triple. Invalid or
+    missing input falls back to the current month — the default
+    3-month window is previous / this / next relative to today.
+    """
+    from datetime import date as _date
+
+    today = _date.today()
+    center = today.replace(day=1)
+    if raw:
+        m = _CAL_CENTER_RE.match(raw.strip())
+        if m:
+            try:
+                center = _date(int(m.group(1)), int(m.group(2)), 1)
+            except ValueError:
+                pass
+    # prev / next relative to center
+    if center.month == 1:
+        prev = _date(center.year - 1, 12, 1)
+    else:
+        prev = _date(center.year, center.month - 1, 1)
+    if center.month == 12:
+        nxt = _date(center.year + 1, 1, 1)
+    else:
+        nxt = _date(center.year, center.month + 1, 1)
+    return center, prev, nxt
+
+
 def _scheduled_dates_for_keys(db: Database, keys) -> dict:
     """Walk every key's ``key_file`` snapshot and return a
     ``{date: [description, ...]}`` mapping suitable for
@@ -111,6 +143,7 @@ def build_router(db: Database, config: Config) -> APIRouter:
         hide_types_preset: str | None = None,
         hide_sources: str | None = None,
         role: str | None = None,
+        cal_center: str | None = None,
     ) -> HTMLResponse:
         z = db.get_zone(zone)
         if z is None:
@@ -121,16 +154,26 @@ def build_router(db: Database, config: Config) -> APIRouter:
         # wins; otherwise fall back to whatever the user typed.
         hide_types = hide_types_preset or hide_types
         fs = FilterSet.from_query(hide_types, hide_sources, role)
-        events = filter_events(
-            db.query_events(zone=zone, limit=config.events_per_page), fs
+        # Pull a broad event set so the visualisations (calendar,
+        # timelines, rollover) have the full history to work with.
+        # The event table below the page uses ``events_per_page``
+        # to decide how many rows to show but the vis pipeline is
+        # not bounded by that — using the paginated slice was the
+        # "no dots on old calendar months" bug.
+        all_events = filter_events(
+            db.query_events(zone=zone, limit=10_000), fs
         )
-        timeline_svg = render_state_timeline(events, keys)
+        events = all_events[: config.events_per_page]
+        timeline_svg = render_state_timeline(all_events, keys)
         # Split the chronological event chart into two channels:
         # DNS (dns_probe + rndc_status) and File (state_file + key_file).
-        dns_timeline_svg = render_event_timeline(dns_channel(events))
-        file_timeline_svg = render_event_timeline(file_channel(events))
+        dns_timeline_svg = render_event_timeline(dns_channel(all_events))
+        file_timeline_svg = render_event_timeline(file_channel(all_events))
         scheduled = _scheduled_dates_for_keys(db, keys)
-        calendar_html = render_calendar(events, scheduled_dates=scheduled)
+        center_date, prev_center, next_center = _calendar_scroll(cal_center)
+        calendar_html = render_calendar(
+            all_events, scheduled_dates=scheduled, center=center_date,
+        )
         # Rollover view — fetch both the state_file snapshot (actual
         # transitions that have already happened) and the key_file
         # snapshot (scheduled Created/Publish/Activate/Inactive/Delete
@@ -164,7 +207,7 @@ def build_router(db: Database, config: Config) -> APIRouter:
             a.key.key_tag: a.state for a in overdue_assessments if a.is_overdue
         }
         rollover_svg = render_rollover_view(
-            events, keys, snapshots, overdue_by_tag=overdue_by_tag,
+            all_events, keys, snapshots, overdue_by_tag=overdue_by_tag,
         )
         return render(
             "zone.html",
@@ -173,6 +216,9 @@ def build_router(db: Database, config: Config) -> APIRouter:
             events=events,
             timeline_svg=timeline_svg,
             calendar_html=calendar_html,
+            calendar_prev=prev_center.strftime("%Y-%m"),
+            calendar_next=next_center.strftime("%Y-%m"),
+            calendar_center=center_date.strftime("%Y-%m"),
             dns_timeline_svg=dns_timeline_svg,
             file_timeline_svg=file_timeline_svg,
             rollover_svg=rollover_svg,
@@ -191,6 +237,7 @@ def build_router(db: Database, config: Config) -> APIRouter:
         hide_types_preset: str | None = None,
         hide_sources: str | None = None,
         role: str | None = None,
+        cal_center: str | None = None,
     ) -> HTMLResponse:
         keys = [k for k in db.list_keys(zone) if k.key_tag == tag]
         if not keys:
@@ -239,7 +286,10 @@ def build_router(db: Database, config: Config) -> APIRouter:
         ]
 
         scheduled = _scheduled_dates_for_keys(db, keys)
-        calendar_html = render_calendar(events, scheduled_dates=scheduled)
+        center_date, prev_center, next_center = _calendar_scroll(cal_center)
+        calendar_html = render_calendar(
+            events, scheduled_dates=scheduled, center=center_date,
+        )
         dns_timeline_svg = render_event_timeline(dns_channel(events))
         file_timeline_svg = render_event_timeline(file_channel(events))
         # Rollover view scoped to just this key tag. Combine state_file
@@ -276,6 +326,9 @@ def build_router(db: Database, config: Config) -> APIRouter:
             events=events,
             timing_change_events=timing_change_events,
             calendar_html=calendar_html,
+            calendar_prev=prev_center.strftime("%Y-%m"),
+            calendar_next=next_center.strftime("%Y-%m"),
+            calendar_center=center_date.strftime("%Y-%m"),
             dns_timeline_svg=dns_timeline_svg,
             file_timeline_svg=file_timeline_svg,
             rollover_svg=rollover_svg,

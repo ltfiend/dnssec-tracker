@@ -142,6 +142,14 @@
 
 {% if calendar_html %}
 <h3>Calendar view</h3>
+<div class="cal-nav">
+  {%- set qs_base %}{% if role and role != 'all' %}&role={{ role }}{% endif %}{% if hide_types %}&hide_types={{ hide_types }}{% endif %}{% if hide_sources %}&hide_sources={{ hide_sources }}{% endif %}{% endset -%}
+  <a class="cal-nav-btn" href="?cal_center={{ calendar_prev }}{{ qs_base }}"
+     title="Previous month range">&larr; earlier</a>
+  <span class="cal-nav-current">{{ calendar_center }}</span>
+  <a class="cal-nav-btn" href="?cal_center={{ calendar_next }}{{ qs_base }}"
+     title="Next month range">later &rarr;</a>
+</div>
 {{ calendar_html|safe }}
 {% endif %}
 

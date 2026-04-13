@@ -50,6 +50,25 @@ def _iter_months(first: date, last: date) -> Iterable[tuple[int, int]]:
             y += 1
 
 
+def _prev_month(d: date) -> date:
+    """First day of the month before ``d``'s month."""
+    if d.month == 1:
+        return date(d.year - 1, 12, 1)
+    return date(d.year, d.month - 1, 1)
+
+
+def _next_month(d: date) -> date:
+    """First day of the month after ``d``'s month."""
+    if d.month == 12:
+        return date(d.year + 1, 1, 1)
+    return date(d.year, d.month + 1, 1)
+
+
+def _month_end(d: date) -> date:
+    """Last day of ``d``'s month."""
+    return _next_month(d) - timedelta(days=1)
+
+
 def _window(
     events: list[Event],
     from_ts: str | None,
@@ -95,6 +114,7 @@ def render_calendar(
     *,
     today: date | None = None,
     scheduled_dates: dict[date, list[str]] | None = None,
+    center: date | None = None,
 ) -> str:
     """Return an HTML fragment of monthly calendar tables.
 
@@ -106,15 +126,27 @@ def render_calendar(
     * ``has-scheduled`` — the date carries one or more scheduled
       DNSSEC transitions (from the ``K*.key`` file's Publish /
       Activate / Inactive / Delete / SyncPublish / SyncDelete
-      timings). The user asked for these so upcoming key milestones
-      show up on the calendar alongside the already-observed events.
+      timings).
 
-    The report's inlined stylesheet styles every combination.
+    ``center`` pins the view to three consecutive months — previous,
+    center's month, and next — which keeps the live UI compact and
+    gives the prev/next scroll links something meaningful to page
+    through. When ``center`` is ``None`` the old auto-window logic
+    applies (bracket events + scheduled dates) so the report export,
+    which wants the full history at one shot, keeps rendering
+    unchanged.
     """
 
     scheduled_dates = scheduled_dates or {}
-    start, end = _window(events, from_ts, to_ts, scheduled_dates)
     today = today or date.today()
+
+    if center is not None:
+        # Pinned 3-month window: previous / center / next.
+        center_month = center.replace(day=1)
+        start = _prev_month(center_month)
+        end = _month_end(_next_month(center_month))
+    else:
+        start, end = _window(events, from_ts, to_ts, scheduled_dates)
 
     by_day: dict[date, list[Event]] = defaultdict(list)
     for e in events:
