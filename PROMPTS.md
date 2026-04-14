@@ -223,3 +223,15 @@ Please see if you can add a state change for when someone issues the command `rn
 
 ---
 
+## 2026-04-14 07:02:56
+
+The Rollover timelines don't seem to be working just right.  The DS records correctly show added and deleted times and the blue line in the chart stops and starts properly but the other lines representing keys only show 'active', 'to be deleted', etc for the full line.  It's not capturing when a KSK appears in a zone or when it goes published > active as seperate events with different bars.   See if you can fix that
+
+---
+
+## 2026-04-14 07:21:22
+
+misclicked, continue
+
+---
+

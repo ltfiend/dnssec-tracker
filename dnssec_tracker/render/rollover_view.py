@@ -245,6 +245,123 @@ def _phase_segments_for_key(
         # entire window. Better than silently dropping it.
         gen = window_start
 
+    # Observation-based refinement. BIND often writes ``Generated``,
+    # ``Published``, and ``Active`` onto the same instant (the moment
+    # the key is loaded, during a pre-publication rollover setup) —
+    # the raw state-file timestamps then collapse gen/pub/act into a
+    # single point and the earlier phases become zero-width, which
+    # the segment builder drops. The user's observation was: "bars
+    # don't capture when a KSK appears in a zone or when it goes
+    # published -> active as separate bars".
+    #
+    # Fix: when a later boundary isn't strictly after the previous
+    # one, look in the event stream for evidence of the actual
+    # transition moment and use THAT to split the phases apart. Only
+    # rewrite when the event time is strictly *later* than the
+    # preceding boundary — we don't invent earlier boundaries, only
+    # push later ones further out so the intermediate phase has real
+    # duration on the chart.
+    def _first_event_ts_after(
+        after: datetime, predicates: list
+    ) -> datetime | None:
+        for e in key_events:
+            for pred in predicates:
+                if pred(e):
+                    ts = _parse_ts(e.ts)
+                    if ts is not None and _ensure_utc(ts) > after:
+                        return _ensure_utc(ts)
+                    break
+        return None
+
+    def _is_state_change_to_omnipresent(field_names: tuple[str, ...]):
+        def check(e: Event) -> bool:
+            if e.event_type != "state_changed":
+                return False
+            d = e.detail or {}
+            return (
+                d.get("field") in field_names
+                and "omnipresent" in str(d.get("new", "")).lower()
+            )
+        return check
+
+    def _is_rndc_change_to_omnipresent(field_names: tuple[str, ...]):
+        def check(e: Event) -> bool:
+            if e.event_type != "rndc_state_changed":
+                return False
+            d = e.detail or {}
+            return (
+                d.get("field") in field_names
+                and "omnipresent" in str(d.get("new", "")).lower()
+            )
+        return check
+
+    # pub got collapsed onto gen — try to find the *observed*
+    # publication moment (DNSKEY actually visible in the zone, or
+    # BIND's DNSKEYState transitioning to rumoured / omnipresent).
+    if pub is not None and gen is not None and _ensure_utc(pub) <= _ensure_utc(gen):
+        refined = _first_event_ts_after(
+            _ensure_utc(gen),
+            [
+                lambda e: e.event_type == "dns_dnskey_appeared_at_zone",
+                _is_state_change_to_omnipresent(("DNSKEYState",)),
+                _is_rndc_change_to_omnipresent(("dnskey",)),
+            ],
+        )
+        if refined is not None:
+            pub = refined
+
+    # act got collapsed onto pub — look for KRRSIG / ZRRSIG going
+    # live (the key is actually signing). Use the KSK/ZSK role to
+    # pick the right RRSIG field.
+    if act is not None and pub is not None and _ensure_utc(act) <= _ensure_utc(pub):
+        rrsig_fields_state: tuple[str, ...]
+        rrsig_fields_rndc: tuple[str, ...]
+        if key.role == "ZSK":
+            rrsig_fields_state = ("ZRRSIGState",)
+            rrsig_fields_rndc = ("zone_rrsig",)
+        else:
+            # KSK, CSK, or unknown — KRRSIG covers DNSKEY RRset.
+            rrsig_fields_state = ("KRRSIGState",)
+            rrsig_fields_rndc = ("key_rrsig",)
+        refined = _first_event_ts_after(
+            _ensure_utc(pub),
+            [
+                _is_state_change_to_omnipresent(rrsig_fields_state),
+                _is_rndc_change_to_omnipresent(rrsig_fields_rndc),
+            ],
+        )
+        if refined is not None:
+            act = refined
+
+    # ret got collapsed onto act — look for the first state change
+    # signalling retirement (GoalState going hidden, or any RRSIG
+    # field leaving omnipresent).
+    if ret is not None and act is not None and _ensure_utc(ret) <= _ensure_utc(act):
+        def _is_goal_hidden(e: Event) -> bool:
+            if e.event_type != "state_changed":
+                return False
+            d = e.detail or {}
+            return (
+                d.get("field") == "GoalState"
+                and "hidden" in str(d.get("new", "")).lower()
+            )
+
+        refined = _first_event_ts_after(
+            _ensure_utc(act), [_is_goal_hidden]
+        )
+        if refined is not None:
+            ret = refined
+
+    # rem got collapsed onto ret — look for the DNSKEY leaving the
+    # zone (observation side, via DNS probe).
+    if rem is not None and ret is not None and _ensure_utc(rem) <= _ensure_utc(ret):
+        refined = _first_event_ts_after(
+            _ensure_utc(ret),
+            [lambda e: e.event_type == "dns_dnskey_disappeared_at_zone"],
+        )
+        if refined is not None:
+            rem = refined
+
     # Enforce monotonicity — downstream maths assumes t_i <= t_{i+1}.
     # Any out-of-order timestamp clamps forward to the previous one.
     boundaries: list[tuple[str, datetime | None]] = [

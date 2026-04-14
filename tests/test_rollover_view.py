@@ -567,3 +567,182 @@ def test_state_file_overrides_key_file_when_both_set():
     active = [s for s in segs if s[2] == "active"]
     assert len(active) == 1
     assert active[0][0] == datetime(2026, 3, 15, tzinfo=timezone.utc)
+
+
+# --------------------------------------------------------------------------
+# Event-driven boundary refinement — user-reported bug:
+# "bars don't capture when a KSK appears in a zone or when it goes
+# published -> active as separate events with different bars".
+#
+# Root cause: BIND often writes Generated/Published/Active at the same
+# instant during rollover setup; the state-file then has all three
+# boundaries at one point, and the segment builder drops zero-width
+# phases so only 'active' survived. Fix: when boundaries collapse,
+# fall through to observed events (dns_dnskey_appeared_at_zone,
+# KRRSIG → omnipresent, etc.) to split the phases apart.
+# --------------------------------------------------------------------------
+
+def test_collapsed_state_timestamps_split_via_observed_events():
+    """gen == pub == act in state file, but DNSKEY-in-zone and
+    KRRSIG-omnipresent events happened on distinct days. The
+    renderer must split the phases apart using the event evidence
+    so pre-publication / published / active are each their own bar.
+    """
+    k = _ksk(12345)
+    snap = _snap(
+        generated="20260301000000",
+        published="20260301000000",
+        active="20260301000000",
+    )
+    events = [
+        Event(ts="2026-03-04T00:00:00Z", source="dns",
+              event_type="dns_dnskey_appeared_at_zone",
+              summary="DNSKEY at zone",
+              zone="example.com", key_tag=12345),
+        Event(ts="2026-03-08T00:00:00Z", source="state",
+              event_type="state_changed",
+              summary="KRRSIG -> omnipresent",
+              zone="example.com", key_tag=12345, key_role="KSK",
+              detail={"field": "KRRSIGState", "new": "omnipresent"}),
+    ]
+    segs = _phase_segments_for_key(
+        k, snap, events,
+        datetime(2026, 2, 20, tzinfo=timezone.utc),
+        datetime(2026, 4, 20, tzinfo=timezone.utc),
+    )
+    phases = [p for _, _, p in segs]
+    assert phases == ["pre-publication", "published", "active"]
+    # Each phase has real duration — pre-pub gen->dns-appeared,
+    # published dns-appeared->KRRSIG-omni, active to window_end.
+    assert segs[0][0] == datetime(2026, 3, 1, tzinfo=timezone.utc)
+    assert segs[0][1] == datetime(2026, 3, 4, tzinfo=timezone.utc)
+    assert segs[1][0] == datetime(2026, 3, 4, tzinfo=timezone.utc)
+    assert segs[1][1] == datetime(2026, 3, 8, tzinfo=timezone.utc)
+    assert segs[2][0] == datetime(2026, 3, 8, tzinfo=timezone.utc)
+
+
+def test_rndc_dnskey_rumoured_also_refines_published_boundary():
+    """If there's no dns_dnskey_appeared_at_zone observation (maybe
+    the DNS probe was disabled), rndc's own view of dnskey going
+    omnipresent serves as the next-best evidence of publication."""
+    k = _ksk(22222)
+    snap = _snap(
+        generated="20260301000000",
+        published="20260301000000",
+        active="20260301000000",
+    )
+    events = [
+        Event(ts="2026-03-05T00:00:00Z", source="rndc",
+              event_type="rndc_state_changed",
+              summary="dnskey -> omnipresent",
+              zone="example.com", key_tag=22222, key_role="KSK",
+              detail={"field": "dnskey", "new": "omnipresent"}),
+    ]
+    segs = _phase_segments_for_key(
+        k, snap, events,
+        datetime(2026, 2, 20, tzinfo=timezone.utc),
+        datetime(2026, 4, 20, tzinfo=timezone.utc),
+    )
+    phases = [p for _, _, p in segs]
+    # With only a publication signal (rndc dnskey -> omnipresent)
+    # and no separate RRSIG-signing signal, the ``published`` and
+    # ``active`` boundaries stay coincident — so we get
+    # pre-publication followed by active. The important regression
+    # guard is ``pre-publication`` existing at all: before the fix,
+    # the whole chart was a single ``active`` bar with no visible
+    # pre-pub segment.
+    assert phases[0] == "pre-publication"
+    # pre-pub ends at the observed rndc publication moment.
+    assert segs[0][1] == datetime(2026, 3, 5, tzinfo=timezone.utc)
+
+
+def test_zsk_uses_zrrsig_to_refine_active_boundary():
+    """ZSKs sign the zone (not DNSKEY), so the refinement looks at
+    ZRRSIG becoming omnipresent, not KRRSIG."""
+    k = Key(zone="example.com", key_tag=67890, role="ZSK",
+            algorithm=13, key_id="Kexample.com.+013+67890",
+            first_seen="2026-03-01T00:00:00Z")
+    snap = _snap(
+        generated="20260301000000",
+        published="20260301000000",
+        active="20260301000000",
+    )
+    events = [
+        Event(ts="2026-03-02T00:00:00Z", source="dns",
+              event_type="dns_dnskey_appeared_at_zone",
+              summary="DNSKEY at zone",
+              zone="example.com", key_tag=67890),
+        Event(ts="2026-03-10T00:00:00Z", source="state",
+              event_type="state_changed",
+              summary="ZRRSIG -> omnipresent",
+              zone="example.com", key_tag=67890, key_role="ZSK",
+              detail={"field": "ZRRSIGState", "new": "omnipresent"}),
+        # KRRSIG events should NOT influence a ZSK — if we see one
+        # here, it'd be wrong to use it. Put one earlier than the
+        # ZRRSIG so the test would fail if the renderer picked the
+        # wrong field.
+        Event(ts="2026-03-05T00:00:00Z", source="state",
+              event_type="state_changed",
+              summary="KRRSIG -> omnipresent (irrelevant for ZSK)",
+              zone="example.com", key_tag=67890, key_role="ZSK",
+              detail={"field": "KRRSIGState", "new": "omnipresent"}),
+    ]
+    segs = _phase_segments_for_key(
+        k, snap, events,
+        datetime(2026, 2, 20, tzinfo=timezone.utc),
+        datetime(2026, 4, 20, tzinfo=timezone.utc),
+    )
+    phases = [p for _, _, p in segs]
+    assert phases == ["pre-publication", "published", "active"]
+    # active boundary must come from the ZRRSIG event (03-10),
+    # not the earlier KRRSIG (03-05).
+    assert segs[2][0] == datetime(2026, 3, 10, tzinfo=timezone.utc)
+
+
+def test_refinement_does_not_override_genuinely_distinct_state_timestamps():
+    """If the state file already has gen != pub != act, the
+    refinement path is skipped — state-file truth wins, we don't
+    manufacture different boundaries."""
+    k = _ksk(33333)
+    snap = _snap(
+        generated="20260301000000",
+        published="20260305000000",
+        active="20260310000000",
+    )
+    # Even if we have events that COULD refine, they're ignored
+    # when state-file boundaries are already distinct.
+    events = [
+        Event(ts="2026-03-15T00:00:00Z", source="dns",
+              event_type="dns_dnskey_appeared_at_zone",
+              summary="later observation",
+              zone="example.com", key_tag=33333),
+    ]
+    segs = _phase_segments_for_key(
+        k, snap, events,
+        datetime(2026, 2, 20, tzinfo=timezone.utc),
+        datetime(2026, 4, 20, tzinfo=timezone.utc),
+    )
+    # The original state-file dates must win — no silent rewriting.
+    assert segs[1][0] == datetime(2026, 3, 5, tzinfo=timezone.utc)
+    assert segs[2][0] == datetime(2026, 3, 10, tzinfo=timezone.utc)
+
+
+def test_collapsed_with_no_events_still_degrades_gracefully():
+    """If the state file collapses everything to one instant AND
+    no events are available, we fall back to a single ``active``
+    segment — no worse than before, and no crash."""
+    k = _ksk(44444)
+    snap = _snap(
+        generated="20260301000000",
+        published="20260301000000",
+        active="20260301000000",
+    )
+    segs = _phase_segments_for_key(
+        k, snap, [],
+        datetime(2026, 2, 20, tzinfo=timezone.utc),
+        datetime(2026, 4, 20, tzinfo=timezone.utc),
+    )
+    phases = [p for _, _, p in segs]
+    # Matches the pre-fix behaviour — with zero event evidence there's
+    # simply nothing to split on.
+    assert phases == ["active"]
