@@ -190,8 +190,10 @@ def test_mixed_source_cluster_uses_muted_colour():
 
 def test_singleton_inline_label_preserved_for_major_type():
     """A solo state_changed with field+new detail still gets its
-    ``KSK12345 GoalState=omnipresent`` inline label — the pre-
-    clustering baseline for sparse streams."""
+    inline label. The label is truncated to ~22 chars so angled
+    labels don't project too far vertically — the tooltip carries
+    the full detail. Key identity (role+tag) and the field name
+    must survive the truncation."""
 
     svg = render_event_timeline([
         Event(
@@ -205,5 +207,122 @@ def test_singleton_inline_label_preserved_for_major_type():
             detail={"field": "GoalState", "new": "omnipresent"},
         )
     ])
+    # Key identity preserved in the inline label.
     assert "KSK12345" in svg
-    assert "GoalState=omnipresent" in svg
+    # Field name preserved (the 22-char cap may drop the trailing
+    # value; the full "GoalState=omnipresent" would only survive
+    # if the caller put it into the event summary, which isn't the
+    # case here).
+    assert "GoalState" in svg
+    # Labels are now rotated so the transform attribute is present.
+    assert 'class="evt-label"' in svg
+    assert "rotate(" in svg
+
+
+# ---- Angled labels + themed hover tooltip ----------------------------
+
+
+def test_singleton_labels_are_rotated_to_prevent_horizontal_overlap():
+    """Two events moderately close in time used to overwrite each
+    other's inline labels — both labels landed on the same y-line
+    and drew on top. The fix rotates labels by ±30° so they fan
+    away from the axis. Assert the rotation transform is emitted
+    on the label text element."""
+    svg = render_event_timeline([
+        Event(
+            ts="2026-04-10T12:00:00Z",
+            source="state",
+            event_type="state_changed",
+            summary="one",
+            zone="example.com", key_tag=11111, key_role="KSK",
+            detail={"field": "GoalState", "new": "omnipresent"},
+        ),
+        Event(
+            ts="2026-04-10T14:00:00Z",
+            source="state",
+            event_type="state_changed",
+            summary="two",
+            zone="example.com", key_tag=22222, key_role="KSK",
+            detail={"field": "DNSKEYState", "new": "omnipresent"},
+        ),
+    ])
+    # Both labels are angled — the rotation transform carries
+    # either -30 or 30 (above-axis vs below-axis clusters) and
+    # happens at the label's own pivot point.
+    import re
+    angles = re.findall(
+        r'<text class="evt-label"[^>]*transform="rotate\((-?\d+)\s',
+        svg,
+    )
+    assert len(angles) == 2
+    # Valid angle values for the fan-out layout.
+    for a in angles:
+        assert a in ("-30", "30")
+
+
+def test_every_cluster_has_a_themed_hover_tip():
+    """Each event cluster is wrapped in ``<g class="evt-cluster">``
+    and carries a nested ``<g class="evt-tip">`` with the larger
+    CSS-controlled tooltip. CSS in app.css makes the tip invisible
+    by default; the parent :hover selector reveals it."""
+    svg = render_event_timeline([
+        Event(
+            ts="2026-04-10T12:00:00Z", source="state",
+            event_type="state_changed", summary="x",
+            zone="example.com", key_tag=1, key_role="KSK",
+            detail={"field": "GoalState", "new": "omnipresent"},
+        ),
+        Event(
+            ts="2026-04-15T12:00:00Z", source="dns",
+            event_type="dns_ds_appeared_at_parent", summary="y",
+            zone="example.com", key_tag=1,
+        ),
+    ])
+    assert svg.count('<g class="evt-cluster">') == 2
+    # Each cluster has its own hover-tip group.
+    assert svg.count('class="evt-tip"') == 2
+    # And a themed background rect.
+    assert svg.count('class="evt-tip-bg"') == 2
+    # Tip lines use the larger font-size class.
+    assert svg.count('class="evt-tip-line"') >= 2
+    # The fallback <title> stays too (PDF export path).
+    assert svg.count("<title>") == 2
+
+
+def test_hover_tip_flips_left_when_dot_is_near_chart_right_edge():
+    """Tooltip default is to the upper-right of the dot; when a
+    dot is near the chart's right edge, the tip should flip to the
+    left so it doesn't overflow the SVG."""
+    # Put an event right at the end of the window.
+    svg = render_event_timeline(
+        [
+            Event(
+                ts="2026-04-01T00:00:00Z", source="state",
+                event_type="state_changed", summary="start",
+                zone="example.com", key_tag=1, key_role="KSK",
+                detail={"field": "GoalState", "new": "omnipresent"},
+            ),
+            Event(
+                ts="2026-04-30T23:59:00Z", source="state",
+                event_type="state_changed", summary="end",
+                zone="example.com", key_tag=1, key_role="KSK",
+                detail={"field": "GoalState", "new": "hidden"},
+            ),
+        ],
+        from_ts="2026-04-01T00:00:00Z",
+        to_ts="2026-04-30T23:59:59Z",
+    )
+    import re
+    tip_xs = [
+        float(m.group(1))
+        for m in re.finditer(
+            r'<g class="evt-tip"[^>]*transform="translate\(([-\d.]+),',
+            svg,
+        )
+    ]
+    assert len(tip_xs) == 2
+    # The second (right-edge) dot's tip x must be clearly to the
+    # left of the first one — the flip kicked in. The dot is at
+    # x ≈ 880 (within ~40 px of the right edge at 920); the tip
+    # must sit left of that, not overflowing past 920.
+    assert tip_xs[1] < 880
