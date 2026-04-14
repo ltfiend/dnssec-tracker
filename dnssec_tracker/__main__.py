@@ -49,9 +49,27 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--clean-deleted-keys",
+        action="store_true",
+        help=(
+            "Scan the key directory and purge stored data for any key "
+            "whose K*.state file is no longer on disk. Emits one "
+            "state_key_file_deleted event per vanished key, drops the "
+            "state_file + key_file snapshots, and removes the row "
+            "from the keys table. Events stay in place. This is a "
+            "*manual* action — the polling collectors never run "
+            "cleanup on their own, to avoid a momentary file "
+            "disappearance (BIND reload, iodyn-dnssec settime race) "
+            "wiping data as a side effect."
+        ),
+    )
+    parser.add_argument(
         "--url",
         default="http://127.0.0.1:8080",
-        help="Base URL of the running instance (used with --refresh).",
+        help=(
+            "Base URL of the running instance (used with --refresh "
+            "and --clean-deleted-keys)."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -62,6 +80,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.refresh:
         return _cmd_refresh(args.url)
+
+    if args.clean_deleted_keys:
+        return _cmd_clean_deleted_keys(args.url)
 
     return _cmd_serve(args)
 
@@ -111,6 +132,41 @@ def _cmd_refresh(base_url: str) -> int:
             any_failed = True
             print(f"  {name:12s} FAIL {info.get('error')}")
     return 1 if any_failed else 0
+
+
+def _cmd_clean_deleted_keys(base_url: str) -> int:
+    url = base_url.rstrip("/") + "/api/clean-deleted-keys"
+    req = urllib.request.Request(url, method="POST", data=b"")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            body = resp.read().decode("utf-8")
+    except urllib.error.URLError as e:
+        print(f"error: could not reach {url}: {e}", file=sys.stderr)
+        return 1
+
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        print(f"error: non-JSON response from {url}: {body[:200]}", file=sys.stderr)
+        return 1
+
+    cleaned = data.get("cleaned") or []
+    live = data.get("live_scopes", "?")
+    prior = data.get("prior_scopes", "?")
+    print(f"Clean deleted keys on {url}:")
+    print(f"  scopes on disk now:    {live}")
+    print(f"  scopes previously seen: {prior}")
+    if not cleaned:
+        print("  no keys needed cleanup — nothing vanished since the last pass.")
+        return 0
+    print(f"  cleaned: {len(cleaned)} key(s):")
+    for c in cleaned:
+        print(
+            f"    - {c.get('zone')} {c.get('role')} "
+            f"tag={c.get('key_tag')} "
+            f"(last seen at {c.get('last_path') or '?'})"
+        )
+    return 0
 
 
 if __name__ == "__main__":

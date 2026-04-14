@@ -272,6 +272,52 @@ tail their files with one-second granularity.
 treat the tracker as a trusted-network tool and expose it via SSH
 tunnel or a reverse proxy in production.
 
+### Cleaning up deleted keys
+
+When you delete a key from BIND's key directory — whether you're
+retiring a rollover experiment, pruning a `.bak` tree, or an iodyn
+retirement pass has moved a key out of scope — the tracker still
+holds that key's snapshots, `keys`-table row, and rollover-chart
+presence. The event log is an append-only historical record and
+stays intact; but forward-looking views (rollover, per-key page,
+key inventory) keep listing the key until you explicitly tell the
+tracker the file is gone.
+
+Cleanup is a **manual** action. The polling collectors never run
+it on their own — a momentary file disappearance during a BIND
+reload or an iodyn `dnssec-settime` race shouldn't wipe a key's
+data as a 30-second-poll side effect. When you're ready:
+
+```bash
+docker exec dnssec-tracker dnssec-tracker --clean-deleted-keys
+```
+
+Or `POST /api/clean-deleted-keys` directly from a trusted-network
+caller. Sample output:
+
+```
+Clean deleted keys on http://127.0.0.1:8080/api/clean-deleted-keys:
+  scopes on disk now:    4
+  scopes previously seen: 6
+  cleaned: 2 key(s):
+    - example.com KSK tag=12345 (last seen at /etc/bind/keys/example.com/Kexample.com.+013+12345.state)
+    - test.invalid ZSK tag=67890 (last seen at /etc/bind/keys/test.invalid/Ktest.invalid.+013+67890.state)
+```
+
+What the cleanup does for each vanished key:
+
+* Emits **one** `state_key_file_deleted` event with
+  `detail.last_fields` (the final state the collector observed),
+  `detail.last_path`, and `detail.trigger="manual"` — a single
+  summary, not a flood of per-field `(unset)` transitions.
+* Drops the `state_file` and `key_file` collector snapshots so
+  the rollover / per-key views stop rendering the key.
+* Removes the row from the `keys` table.
+
+Historical events are **not touched** — they carry their own
+zone / tag / role metadata and continue to render in the event log
+and on the timelines.
+
 ### Mounts
 
 The container expects these read-only mounts:

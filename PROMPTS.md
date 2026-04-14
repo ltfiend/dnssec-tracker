@@ -253,3 +253,9 @@ This looks really good.  There's one interesting corner case, DS records need to
 
 ---
 
+## 2026-04-14 11:25:08
+
+Remind me, do we have a method that removes all entries for keys once the file no longer exists?  I want this to be a manual process that we need to trigger rather ahn an automated one.  I believe we added that earlier but there is no info in the readme.
+
+---
+

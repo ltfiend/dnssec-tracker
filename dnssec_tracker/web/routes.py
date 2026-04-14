@@ -523,6 +523,39 @@ def build_router(db: Database, config: Config) -> APIRouter:
                 results[c.name] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
         return JSONResponse({"refreshed": results})
 
+    # ---- Clean deleted keys ----------------------------------------
+
+    @router.post("/api/clean-deleted-keys")
+    async def api_clean_deleted_keys(request: Request) -> JSONResponse:
+        """Scan the key directory and purge stored data for any key
+        whose ``K*.state`` file is no longer on disk.
+
+        This is a **manual** action — the state_file collector does
+        NOT run cleanup as part of its 30-second polling loop,
+        because a file momentarily missing during a BIND reload or
+        iodyn-dnssec settime race shouldn't wipe a key's snapshot
+        as a side effect. An operator triggers cleanup when they
+        intentionally delete keys.
+
+        For each vanished key, one ``state_key_file_deleted`` event
+        is emitted (state change: removed) and the state_file +
+        key_file snapshots plus the ``keys``-table row are dropped.
+        Events stay in place — the event log is an append-only
+        historical record.
+
+        Called by ``dnssec-tracker --clean-deleted-keys`` (and
+        therefore by
+        ``docker exec dnssec-tracker dnssec-tracker --clean-deleted-keys``).
+        """
+
+        from ..cleanup import clean_deleted_keys
+
+        report = clean_deleted_keys(
+            request.app.state.db,
+            request.app.state.config,
+        )
+        return JSONResponse(report.to_dict())
+
     # ---- Reports ----------------------------------------------------
 
     @router.get("/zones/{zone}/report.html")

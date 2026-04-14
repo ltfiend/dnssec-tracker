@@ -129,55 +129,11 @@ class StateFileCollector(Collector):
                 {"fields": tracked, "path": str(sf.path)},
             )
 
-        # Clean deleted keys: any scope we've previously snapshotted
-        # but didn't see in this scan means the K*.state file is no
-        # longer where we expect it (operator cleanup, backup move,
-        # or iodyn retiring the key out of the active directory).
-        # Emit a *single* summary event per vanished key — not a
-        # flood of per-field "unset" events — then drop the stored
-        # data for that key so it stops appearing on timelines.
-        prior_scopes = set(self.db.list_snapshot_scopes(self.name))
-        vanished = prior_scopes - seen_scopes
-        for scope in vanished:
-            # scope shape is "zone#tag#role"
-            try:
-                zone, tag_s, role = scope.split("#", 2)
-                tag = int(tag_s)
-            except (ValueError, IndexError):
-                # Malformed scope — just drop it, don't emit an event.
-                self.db.delete_snapshot(self.name, scope)
-                continue
-
-            prev = self.db.get_snapshot(self.name, scope) or {}
-            last_fields = prev.get("fields", {}) or {}
-            last_path = prev.get("path")
-
-            self.db.insert_event(
-                Event(
-                    ts=now_iso(),
-                    source="state",
-                    event_type="state_key_file_deleted",
-                    summary=(
-                        f"{zone} {role} tag={tag}: K*.state file no longer "
-                        f"present on disk (state change: removed)"
-                    ),
-                    zone=zone,
-                    key_tag=tag,
-                    key_role=role,
-                    detail={
-                        "last_path": last_path,
-                        "last_fields": last_fields,
-                    },
-                )
-            )
-            # Drop the stored data for this key so it stops showing
-            # on rollover / per-key views. Events stay in place —
-            # they carry their own zone/tag/role metadata and the
-            # historical record is intentionally preserved.
-            self.db.delete_snapshot(self.name, scope)
-            self.db.delete_snapshot("key_file", scope)
-            self.db.delete_key(zone, tag, role)
-            log.info(
-                "state_file cleanup: %s %s tag=%d file gone, data cleared",
-                zone, role, tag,
-            )
+        # NOTE: vanished-key cleanup deliberately does NOT run from
+        # this polling collector. A file that's momentarily
+        # unreadable during a BIND reload or iodyn-dnssec settime
+        # race shouldn't wipe a key's snapshot as a side-effect of a
+        # 30-second poll. Cleanup is a manual action: see
+        # :func:`dnssec_tracker.cleanup.clean_deleted_keys`,
+        # ``POST /api/clean-deleted-keys``, and the
+        # ``dnssec-tracker --clean-deleted-keys`` CLI flag.

@@ -1,10 +1,25 @@
-"""Clean deleted keys: when a K*.state file disappears from disk
-between polls, the tracker must emit ONE summary event
-(``state_key_file_deleted``), delete the collector snapshots for
-that key (both state_file and key_file), and drop the row from
-the ``keys`` table so forward-looking views stop rendering the
-key. Historical events stay in place — they carry their own
-zone/tag/role metadata and the event log remains a full record.
+"""Clean deleted keys — **manual** cleanup only.
+
+When a K*.state file disappears from disk, running the manual
+``clean_deleted_keys(db, config)`` entry point (also exposed as
+``POST /api/clean-deleted-keys`` and the ``--clean-deleted-keys``
+CLI flag) must:
+
+* emit ONE ``state_key_file_deleted`` summary event per vanished
+  key (no flood of per-field ``(unset)`` transitions),
+* drop both the ``state_file`` and ``key_file`` collector
+  snapshots,
+* remove the ``keys``-table row so forward-looking views
+  (rollover, per-key page) stop rendering the key,
+
+while **leaving historical events untouched** — they carry their
+own zone/tag/role metadata and the event log is an append-only
+record.
+
+The *polling* collectors must never run cleanup on their own: a
+momentary file disappearance during a BIND reload or an iodyn
+settime race should not wipe a key's data as a side effect. An
+operator triggers cleanup when they mean to.
 """
 
 from __future__ import annotations
@@ -13,6 +28,7 @@ from pathlib import Path
 
 import pytest
 
+from dnssec_tracker.cleanup import clean_deleted_keys
 from dnssec_tracker.collectors.key_file import KeyFileCollector
 from dnssec_tracker.collectors.state_file import StateFileCollector
 from dnssec_tracker.config import Config
@@ -70,10 +86,10 @@ async def test_vanished_state_file_emits_single_summary_event(tmp_path):
     state_path.unlink()
     (state_path.parent / state_path.name.replace(".state", ".key")).unlink()
 
-    # Second pass — must detect the vanishment.
-    await col.sample()
+    # Manual cleanup — the explicit entry point.
+    report = clean_deleted_keys(db, cfg)
+    assert report.count == 1
 
-    # Exactly one state_key_file_deleted event for the vanished key.
     deletions = db.query_events(event_type="state_key_file_deleted", limit=50)
     assert len(deletions) == 1
     ev = deletions[0]
@@ -81,9 +97,14 @@ async def test_vanished_state_file_emits_single_summary_event(tmp_path):
     assert ev.key_tag == 12345
     assert ev.key_role == "KSK"
     assert "no longer present on disk" in ev.summary
+    assert "cleaned up manually" in ev.summary
     # detail carries the last-observed state so the historical
     # record is intact.
     assert ev.detail.get("last_fields", {}).get("GoalState") == "omnipresent"
+    # detail.trigger is "manual" so downstream consumers can
+    # distinguish operator-triggered cleanup from any future
+    # automated paths.
+    assert ev.detail.get("trigger") == "manual"
 
     # No per-field "(unset)" spam — the whole point of collapsing.
     unset_events = [
@@ -95,13 +116,42 @@ async def test_vanished_state_file_emits_single_summary_event(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_vanished_key_snapshots_and_row_are_cleared(tmp_path):
-    """After the summary event fires, the collector drops:
-    * the state_file snapshot for that scope
-    * the key_file snapshot for that scope
-    * the keys-table row
-    so forward-looking views (rollover, per-key page) stop
-    rendering the key."""
+async def test_polling_alone_does_NOT_clean_up(tmp_path):
+    """Critical regression: the state_file collector must NOT fire
+    cleanup as a side effect of polling. A momentary file
+    disappearance during a BIND reload or iodyn settime race
+    should not wipe a key's data."""
+
+    state_path = _seed_ksk(tmp_path)
+    cfg = _cfg(tmp_path)
+    db = Database(cfg.db_path)
+    col = StateFileCollector(cfg, db)
+
+    # Seed from live files.
+    await col.sample()
+    assert db.get_snapshot("state_file", "example.com#12345#KSK")
+
+    # Remove the file but don't call clean_deleted_keys.
+    state_path.unlink()
+    (state_path.parent / state_path.name.replace(".state", ".key")).unlink()
+
+    # Multiple polling passes must NOT fire cleanup events or
+    # touch the stored data.
+    for _ in range(3):
+        await col.sample()
+
+    assert db.query_events(event_type="state_key_file_deleted") == []
+    # Snapshot still holds the last-seen fields; keys row still present.
+    assert db.get_snapshot("state_file", "example.com#12345#KSK")
+    assert db.list_keys("example.com")
+
+
+@pytest.mark.asyncio
+async def test_vanished_key_snapshots_and_row_are_cleared_on_manual_cleanup(tmp_path):
+    """After the summary event fires (via manual cleanup), the
+    state_file snapshot, key_file snapshot, and keys-table row
+    are all removed — forward-looking views stop rendering the
+    key. Events stay in place."""
 
     state_path = _seed_ksk(tmp_path)
     cfg = _cfg(tmp_path)
@@ -121,8 +171,9 @@ async def test_vanished_key_snapshots_and_row_are_cleared(tmp_path):
     state_path.unlink()
     (state_path.parent / state_path.name.replace(".state", ".key")).unlink()
 
-    # state_file pass: detects vanishment, cleans up.
-    await state_col.sample()
+    # Manual trigger.
+    report = clean_deleted_keys(db, cfg)
+    assert report.count == 1
 
     # All three stores are clean for this key.
     assert db.get_snapshot("state_file", "example.com#12345#KSK") == {}
@@ -148,13 +199,12 @@ async def test_historical_events_survive_the_cleanup(tmp_path):
     )
     assert len(baseline) == 1
 
-    # Remove the file, re-sample (cleanup fires).
+    # Remove the file, then manual cleanup.
     state_path.unlink()
     (state_path.parent / state_path.name.replace(".state", ".key")).unlink()
-    await col.sample()
+    clean_deleted_keys(db, cfg)
 
-    # The first-sighting event is still queryable — history isn't
-    # wiped alongside the cleanup.
+    # The first-sighting event is still queryable.
     preserved = db.query_events(
         zone="example.com", event_type="state_key_observed",
     )
@@ -163,38 +213,40 @@ async def test_historical_events_survive_the_cleanup(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_no_vanish_event_on_first_scan(tmp_path):
-    """First poll of a fresh install — nothing has been snapshotted
-    previously, so there can't be any vanished keys. The collector
-    must not emit phantom deletions just because the snapshot
-    store started empty."""
-
+async def test_cleanup_on_empty_db_is_a_no_op(tmp_path):
+    """First run of cleanup on a fresh install: nothing to clean,
+    report.count == 0, no events emitted."""
     _seed_ksk(tmp_path)
     cfg = _cfg(tmp_path)
     db = Database(cfg.db_path)
-    col = StateFileCollector(cfg, db)
-    await col.sample()
-
-    assert db.query_events(event_type="state_key_file_deleted", limit=50) == []
+    report = clean_deleted_keys(db, cfg)
+    assert report.count == 0
+    assert db.query_events(event_type="state_key_file_deleted") == []
 
 
 @pytest.mark.asyncio
-async def test_key_still_present_between_polls_no_false_deletion(tmp_path):
-    """Sanity: two polls with the file unchanged should not trigger
-    a deletion event."""
-    _seed_ksk(tmp_path)
+async def test_cleanup_is_idempotent(tmp_path):
+    """Running cleanup twice in a row with nothing new vanished
+    in between must fire no additional events on the second run."""
+    state_path = _seed_ksk(tmp_path)
     cfg = _cfg(tmp_path)
     db = Database(cfg.db_path)
     col = StateFileCollector(cfg, db)
     await col.sample()
-    await col.sample()
-    assert db.query_events(event_type="state_key_file_deleted", limit=50) == []
+
+    state_path.unlink()
+    (state_path.parent / state_path.name.replace(".state", ".key")).unlink()
+
+    r1 = clean_deleted_keys(db, cfg)
+    r2 = clean_deleted_keys(db, cfg)
+    assert r1.count == 1
+    assert r2.count == 0
+    # Only one event emitted total.
+    assert len(db.query_events(event_type="state_key_file_deleted")) == 1
 
 
 @pytest.mark.asyncio
 async def test_multiple_vanished_keys_each_get_their_own_summary(tmp_path):
-    """Two keys vanishing at once — each gets its own single
-    summary event (no mega-event collapsing both together)."""
     _seed_ksk(tmp_path, tag=11111)
     _seed_ksk(tmp_path, zone="another.example", tag=22222)
     cfg = _cfg(tmp_path)
@@ -209,8 +261,119 @@ async def test_multiple_vanished_keys_each_get_their_own_summary(tmp_path):
             p.unlink()
         zone_dir.rmdir()
 
-    await col.sample()
-
+    report = clean_deleted_keys(db, cfg)
+    assert report.count == 2
     deletions = db.query_events(event_type="state_key_file_deleted", limit=50)
     tags = sorted(e.key_tag for e in deletions)
     assert tags == [11111, 22222]
+
+
+# ---- HTTP endpoint ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_api_clean_deleted_keys_endpoint(tmp_path):
+    from fastapi.testclient import TestClient
+    from dnssec_tracker.app import create_app
+
+    state_path = _seed_ksk(tmp_path)
+    cfg = _cfg(tmp_path)
+    for k in cfg.enabled_collectors:
+        cfg.enabled_collectors[k] = False
+    app = create_app(cfg)
+
+    # Seed via the same collector the live app uses.
+    state_col = StateFileCollector(cfg, app.state.db)
+    await state_col.sample()
+
+    # Remove the files.
+    state_path.unlink()
+    (state_path.parent / state_path.name.replace(".state", ".key")).unlink()
+
+    with TestClient(app) as client:
+        r = client.post("/api/clean-deleted-keys")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 1
+    assert body["cleaned"][0]["zone"] == "example.com"
+    assert body["cleaned"][0]["key_tag"] == 12345
+    assert body["cleaned"][0]["role"] == "KSK"
+    assert body["prior_scopes"] == 1
+    assert body["live_scopes"] == 0
+
+
+# ---- CLI ---------------------------------------------------------
+
+
+def test_cli_clean_deleted_keys_prints_summary(capsys, monkeypatch):
+    """The ``dnssec-tracker --clean-deleted-keys`` CLI flag POSTs to
+    the running instance's /api/clean-deleted-keys endpoint and
+    prints a readable summary."""
+    import json as _json
+    import urllib.request
+
+    fake_response = _json.dumps({
+        "cleaned": [
+            {"zone": "example.com", "key_tag": 12345, "role": "KSK",
+             "last_path": "/etc/bind/keys/example.com/K....state",
+             "last_fields": {}},
+            {"zone": "other.example", "key_tag": 67890, "role": "ZSK",
+             "last_path": None, "last_fields": {}},
+        ],
+        "count": 2,
+        "live_scopes": 5,
+        "prior_scopes": 7,
+    }).encode()
+
+    class _FakeResp:
+        def __init__(self, body): self._body = body
+        def read(self): return self._body
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=None):
+        assert req.full_url.endswith("/api/clean-deleted-keys")
+        assert req.get_method() == "POST"
+        return _FakeResp(fake_response)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    from dnssec_tracker.__main__ import main
+    rc = main(["--clean-deleted-keys", "--url", "http://127.0.0.1:8080"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "scopes on disk now:    5" in out
+    assert "scopes previously seen: 7" in out
+    assert "cleaned: 2 key(s):" in out
+    assert "example.com KSK tag=12345" in out
+    assert "other.example ZSK tag=67890" in out
+
+
+def test_cli_clean_deleted_keys_no_op_friendly_output(capsys, monkeypatch):
+    """When nothing's to clean up, the CLI prints a friendly
+    no-op message rather than staying silent."""
+    import json as _json
+    import urllib.request
+
+    fake_response = _json.dumps({
+        "cleaned": [],
+        "count": 0,
+        "live_scopes": 3,
+        "prior_scopes": 3,
+    }).encode()
+
+    class _FakeResp:
+        def __init__(self, body): self._body = body
+        def read(self): return self._body
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(
+        urllib.request, "urlopen",
+        lambda req, timeout=None: _FakeResp(fake_response),
+    )
+    from dnssec_tracker.__main__ import main
+    rc = main(["--clean-deleted-keys"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "no keys needed cleanup" in out
