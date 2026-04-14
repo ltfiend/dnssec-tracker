@@ -135,8 +135,8 @@ def _build_report_context(
     # both the state_file snapshot (actual transitions) and the
     # key_file snapshot (scheduled Created/Publish/Activate/Inactive/
     # Delete times from the K*.key header) so a key whose scheduled
-    # Delete has already passed renders as "past-deletion-date"
-    # instead of collapsing into an unbounded "pre-publication".
+    # Delete has already passed renders as "removed"
+    # instead of collapsing into an unbounded "pre-published".
     rollover_snapshots = {}
     for k in keys:
         scope = f"{zone}#{k.key_tag}#{k.role}"

@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from ..config import Config
+from ..demo import build_rollover_demo
 from ..db import Database
 from ..parsers.bind_state import STATE_FIELDS, TIMESTAMP_FIELDS
 from ..render.calendar import render_calendar
@@ -180,8 +181,8 @@ def build_router(db: Database, config: Config) -> APIRouter:
         # times iodyn wrote into the K*.key header). The renderer
         # prefers state_file values when set and falls back to the
         # scheduled key_file values so a key whose Delete time has
-        # already passed renders as "past-deletion-date" instead of
-        # collapsing into an unbounded "pre-publication".
+        # already passed renders as "removed" instead of
+        # collapsing into an unbounded "pre-published".
         snapshots = {}
         for k in keys:
             scope = f"{k.zone}#{k.key_tag}#{k.role}"
@@ -197,7 +198,7 @@ def build_router(db: Database, config: Config) -> APIRouter:
         # current state of the world; the per-key snapshots carry the
         # scheduled Delete time. Overdue keys trigger both a red
         # warning banner at the top of the page and a high-contrast
-        # fill on the rollover view's past-deletion-date segment.
+        # fill on the rollover view's removed segment.
         zone_dns_snap = db.get_snapshot("dns_probe", f"zone:{z.name}") or {}
         parent_dns_snap = db.get_snapshot("dns_probe", f"parent:{z.name}") or {}
         overdue_assessments = assess_all(
@@ -337,6 +338,82 @@ def build_router(db: Database, config: Config) -> APIRouter:
             hide_types=hide_types or "",
             hide_sources=hide_sources or "",
             role=fs.role,
+        )
+
+    # ---- Demo ------------------------------------------------------
+    #
+    # A synthetic 12-month zone with 3 KSK rollovers and 13 ZSK
+    # rollovers, rendered through the same zone template so the
+    # rollover / calendar / timeline chrome can be evaluated against
+    # a realistic dataset. No DB writes, ephemeral per-request. See
+    # :mod:`dnssec_tracker.demo.scenarios`.
+
+    @router.get("/demo", response_class=HTMLResponse)
+    def demo_zone(
+        cal_center: str | None = None,
+    ) -> HTMLResponse:
+        d = build_rollover_demo()
+        keys = d.keys
+        events = d.events
+
+        # Calendar scroll (same helper zone_detail uses).
+        scheduled = {}  # demo has no human-set K*.key scheduled dates
+        center_date, prev_center, next_center = _calendar_scroll(cal_center)
+        calendar_html = render_calendar(
+            events, scheduled_dates=scheduled, center=center_date,
+        )
+
+        # Visualisations — explicit window so the chart matches the
+        # 12-month scenario the demo is built for, not the auto-fitted
+        # range.
+        from_ts = d.window_start.isoformat().replace("+00:00", "Z")
+        to_ts = d.window_end.isoformat().replace("+00:00", "Z")
+        timeline_svg = render_state_timeline(events, keys)
+        dns_timeline_svg = render_event_timeline(
+            dns_channel(events), from_ts, to_ts,
+        )
+        file_timeline_svg = render_event_timeline(
+            file_channel(events), from_ts, to_ts,
+        )
+        # Overdue assessment — the demo is intentionally healthy so
+        # this should come back empty, but we run the path to make
+        # sure the demo exercises it end-to-end.
+        overdue_assessments = assess_all(
+            keys, d.snapshots, d.zone_dns_snapshot, d.parent_dns_snapshot,
+            now=d.window_end,
+        )
+        overdue_active = [a for a in overdue_assessments if a.is_overdue]
+        overdue_by_tag = {a.key.key_tag: a.state for a in overdue_active}
+        rollover_svg = render_rollover_view(
+            events, keys, d.snapshots,
+            from_ts=from_ts, to_ts=to_ts,
+            today=d.window_end,
+            overdue_by_tag=overdue_by_tag,
+        )
+
+        # Fake a FilterSet with defaults so the shared template's
+        # filter form echoes back neutral values.
+        fs = FilterSet.from_query(None, None, None)
+
+        return render(
+            "zone.html",
+            zone=d.zone,
+            keys=keys,
+            events=events,
+            timeline_svg=timeline_svg,
+            calendar_html=calendar_html,
+            calendar_prev=prev_center.strftime("%Y-%m"),
+            calendar_next=next_center.strftime("%Y-%m"),
+            calendar_center=center_date.strftime("%Y-%m"),
+            dns_timeline_svg=dns_timeline_svg,
+            file_timeline_svg=file_timeline_svg,
+            rollover_svg=rollover_svg,
+            overdue_assessments=overdue_active,
+            filterset=fs,
+            hide_types="",
+            hide_sources="",
+            role="all",
+            demo=True,
         )
 
     @router.get("/events", response_class=HTMLResponse)

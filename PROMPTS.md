@@ -241,3 +241,9 @@ Should that render previously tracked changes properly?  I'm still seeing only o
 
 ---
 
+## 2026-04-14 09:09:19
+
+We seem to be having some problems with this, the charts are still strange but it's a little hard to tell with the very short timeframes I'm working with.  I'd like you to build me a sample page with a dateset that covers 12 months with 1 month ZSK rollovers and 6 month KSK rollovers.  I'd also like you to re-evaluate if the rollover charts are the best method to get that representation.  I'm trying to build charts similar to this: https://www.redhat.com/rhdc/managed-files/styles/default_800/private/rolloverplan.png.webp?itok=9UQcZy9r.   Take a few minutes to re-evaluate and plan out the approach.   For Keys we must capture the following states.   Pre-published (key exists but not in zone), published (key exists in zone but not signing), active (signing), inactive (no longer signing) removed (no longer in the zone).  For KSKs we must also capture 'ds present at parent' which the current charts due correctly.
+
+---
+

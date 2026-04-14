@@ -125,10 +125,10 @@ def test_ksk_rollover_scenario():
     assert "alg 13" in svg
 
     # Phase tooltips / class markers. The old "retired" phase was
-    # renamed to "to-be-deleted" to reflect BIND's Inactive→Delete
+    # renamed to "inactive" to reflect BIND's Inactive→Delete
     # semantic ("not signing, awaiting removal").
     assert "phase-active" in svg
-    assert "phase-to-be-deleted" in svg
+    assert "phase-inactive" in svg
 
     # DS overlay — both keys have DS events so two live stripes are emitted.
     assert svg.count('data-ds="live"') >= 2
@@ -137,7 +137,7 @@ def test_ksk_rollover_scenario():
 
     # Tooltip copy includes the phase names so mouseover is useful.
     assert "active" in svg
-    assert "to-be-deleted" in svg or "to be deleted" in svg
+    assert "inactive" in svg or "to be deleted" in svg
 
 
 # --------------------------------------------------------------------------
@@ -201,7 +201,7 @@ def test_empty_inputs_returns_placeholder_svg():
 
 def test_key_whose_delete_preceded_window_renders_as_past_deletion_date():
     """A key whose entire scheduled lifecycle fell before the reported
-    window now renders as ``past-deletion-date`` spanning the window
+    window now renders as ``removed`` spanning the window
     — the user needs to see that the key is overdue for removal even
     if the actual Delete timestamp is old. Previously this rendered a
     "No key activity" placeholder, which hid the problem.
@@ -225,9 +225,9 @@ def test_key_whose_delete_preceded_window_renders_as_past_deletion_date():
     )
     assert "<svg" in svg
     assert "</svg>" in svg
-    # No placeholder — the past-deletion-date segment fills the window.
+    # No placeholder — the removed segment fills the window.
     assert "No key activity" not in svg
-    assert "phase-past-deletion-date" in svg
+    assert "phase-removed" in svg
 
 
 # --------------------------------------------------------------------------
@@ -255,7 +255,7 @@ def test_snapshot_only_key_renders_without_events():
     assert svg.startswith("<svg")
     assert "tag 33333" in svg
     # Pre-publication + published + active — three phases should be drawn.
-    assert "phase-pre-publication" in svg
+    assert "phase-pre-published" in svg
     assert "phase-published" in svg
     assert "phase-active" in svg
 
@@ -267,7 +267,7 @@ def test_snapshot_only_key_renders_without_events():
 def test_phase_segments_for_canonical_ksk_snapshot():
     """Published + Active set, Retired/Removed still ``0`` — the key is
     alive and actively signing. The helper should produce exactly the
-    three expected phases: pre-publication, published, active-to-window-
+    three expected phases: pre-published, published, active-to-window-
     end."""
     k = _ksk(44444)
     snap = _snap(
@@ -285,7 +285,7 @@ def test_phase_segments_for_canonical_ksk_snapshot():
     assert len(segs) == 3
 
     (s0, e0, p0), (s1, e1, p1), (s2, e2, p2) = segs
-    assert p0 == "pre-publication"
+    assert p0 == "pre-published"
     assert p1 == "published"
     assert p2 == "active"
 
@@ -299,7 +299,7 @@ def test_phase_segments_for_canonical_ksk_snapshot():
 
 def test_phase_segments_for_fully_retired_key():
     """All five boundary timestamps set — full lifecycle in the
-    window. The ``past-deletion-date`` phase now *renders* (it used
+    window. The ``removed`` phase now *renders* (it used
     to be a silent terminal marker), so a key whose Delete has
     passed shows a muted bar out to the window edge — the operator
     can see "this key is past its scheduled removal".
@@ -318,17 +318,17 @@ def test_phase_segments_for_fully_retired_key():
     segs = _phase_segments_for_key(k, snap, [], window_start, window_end)
     phases = [p for _, _, p in segs]
     assert phases == [
-        "pre-publication",
+        "pre-published",
         "published",
         "active",
-        "to-be-deleted",
-        "past-deletion-date",
+        "inactive",
+        "removed",
     ]
-    # to-be-deleted runs Inactive -> Delete
+    # inactive runs Inactive -> Delete
     to_be_deleted = segs[-2]
     assert to_be_deleted[0] == datetime(2026, 3, 20, tzinfo=timezone.utc)
     assert to_be_deleted[1] == datetime(2026, 3, 25, tzinfo=timezone.utc)
-    # past-deletion-date extends from Delete to the window edge
+    # removed extends from Delete to the window edge
     past = segs[-1]
     assert past[0] == datetime(2026, 3, 25, tzinfo=timezone.utc)
     assert past[1] == window_end
@@ -433,7 +433,7 @@ def test_ksk_and_zsk_not_considered_an_algorithm_rollover():
 #
 # Regression test for the bug where a key whose state_file has every
 # field zeroed except `Generated` but whose K*.key header has the full
-# scheduled lifecycle would render as an unbounded `pre-publication`
+# scheduled lifecycle would render as an unbounded `pre-published`
 # bar — even when the scheduled Delete was in the past.
 # --------------------------------------------------------------------------
 
@@ -493,19 +493,19 @@ def test_phase_segments_fall_back_to_key_file_scheduled_timings():
     segs = _phase_segments_for_key(k, snap, [], window_start, window_end)
     phases = [p for _, _, p in segs]
     assert phases == [
-        "pre-publication",
+        "pre-published",
         "published",
         "active",
-        "to-be-deleted",
-        "past-deletion-date",
+        "inactive",
+        "removed",
     ]
 
 
 def test_post_delete_key_renders_as_past_deletion_date_not_pre_publication():
     """The specific user-reported bug: a key whose scheduled Delete is
-    in the past was rendering as a long ``pre-publication`` bar because
+    in the past was rendering as a long ``pre-published`` bar because
     the state file hadn't caught up. With key-file fallback the final
-    phase is ``past-deletion-date`` extending to window_end.
+    phase is ``removed`` extending to window_end.
     """
     k = _ksk(77777)
     # state file only knows Generated; everything else is still 0.
@@ -524,9 +524,9 @@ def test_post_delete_key_renders_as_past_deletion_date_not_pre_publication():
 
     segs = _phase_segments_for_key(k, snap, [], window_start, window_end)
     phases = [p for _, _, p in segs]
-    # Crucially, the LAST phase must be past-deletion-date, NOT
-    # pre-publication (which was the bug).
-    assert phases[-1] == "past-deletion-date"
+    # Crucially, the LAST phase must be removed, NOT
+    # pre-published (which was the bug).
+    assert phases[-1] == "removed"
     # And that phase must extend from the scheduled Delete to window_end.
     last = segs[-1]
     assert last[0] == datetime(2025, 6, 8, tzinfo=timezone.utc)
@@ -586,7 +586,7 @@ def test_collapsed_state_timestamps_split_via_observed_events():
     """gen == pub == act in state file, but DNSKEY-in-zone and
     KRRSIG-omnipresent events happened on distinct days. The
     renderer must split the phases apart using the event evidence
-    so pre-publication / published / active are each their own bar.
+    so pre-published / published / active are each their own bar.
     """
     k = _ksk(12345)
     snap = _snap(
@@ -611,7 +611,7 @@ def test_collapsed_state_timestamps_split_via_observed_events():
         datetime(2026, 4, 20, tzinfo=timezone.utc),
     )
     phases = [p for _, _, p in segs]
-    assert phases == ["pre-publication", "published", "active"]
+    assert phases == ["pre-published", "published", "active"]
     # Each phase has real duration — pre-pub gen->dns-appeared,
     # published dns-appeared->KRRSIG-omni, active to window_end.
     assert segs[0][0] == datetime(2026, 3, 1, tzinfo=timezone.utc)
@@ -647,11 +647,11 @@ def test_rndc_dnskey_rumoured_also_refines_published_boundary():
     # With only a publication signal (rndc dnskey -> omnipresent)
     # and no separate RRSIG-signing signal, the ``published`` and
     # ``active`` boundaries stay coincident — so we get
-    # pre-publication followed by active. The important regression
-    # guard is ``pre-publication`` existing at all: before the fix,
+    # pre-published followed by active. The important regression
+    # guard is ``pre-published`` existing at all: before the fix,
     # the whole chart was a single ``active`` bar with no visible
     # pre-pub segment.
-    assert phases[0] == "pre-publication"
+    assert phases[0] == "pre-published"
     # pre-pub ends at the observed rndc publication moment.
     assert segs[0][1] == datetime(2026, 3, 5, tzinfo=timezone.utc)
 
@@ -693,7 +693,7 @@ def test_zsk_uses_zrrsig_to_refine_active_boundary():
         datetime(2026, 4, 20, tzinfo=timezone.utc),
     )
     phases = [p for _, _, p in segs]
-    assert phases == ["pre-publication", "published", "active"]
+    assert phases == ["pre-published", "published", "active"]
     # active boundary must come from the ZRRSIG event (03-10),
     # not the earlier KRRSIG (03-05).
     assert segs[2][0] == datetime(2026, 3, 10, tzinfo=timezone.utc)
@@ -753,7 +753,7 @@ def test_collapsed_with_no_events_still_degrades_gracefully():
 # "I'm still seeing only one color bar other than the DS one and it
 # takes up the whole timeframe."
 #
-# On a year-wide chart a 2-day pre-publication phase projects to ~3
+# On a year-wide chart a 2-day pre-published phase projects to ~3
 # pixels — technically drawn but visually invisible next to the
 # months-long active band. Enforce a 6-px floor for every positive-
 # duration segment so every phase transition stays legible.
@@ -790,18 +790,18 @@ def test_short_phases_get_minimum_visible_width_on_long_chart():
             svg,
         )
     }
-    assert "pre-publication" in widths
+    assert "pre-published" in widths
     assert "published" in widths
     assert "active" in widths
     # Every positive-duration phase must be visually detectable.
-    assert widths["pre-publication"] >= 6.0, (
-        f"pre-publication bar only {widths['pre-publication']}px — "
+    assert widths["pre-published"] >= 6.0, (
+        f"pre-published bar only {widths['pre-published']}px — "
         f"this is the 'can't see the phase change' regression"
     )
     assert widths["published"] >= 6.0
     # Active still dominates but the earlier phases stole a few
     # pixels. Confirm it's still clearly the biggest.
-    assert widths["active"] > 10 * widths["pre-publication"]
+    assert widths["active"] > 10 * widths["pre-published"]
 
 
 def test_minimum_width_does_not_push_bars_past_chart_right_edge():

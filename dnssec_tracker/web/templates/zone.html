@@ -3,6 +3,16 @@
 {% block title %}{{ zone.name }} — dnssec-tracker{% endblock %}
 
 {% block content %}
+{% if demo %}
+<div class="demo-banner" role="note">
+  <strong>Demo / synthetic data.</strong>
+  This page shows a 12-month scenario with 1-month ZSK rollovers and
+  6-month KSK rollovers — every bar, dot, calendar mark and DS
+  stripe is generated from an in-memory fixture, not from real
+  collector data. Use it to evaluate the chart semantics against a
+  realistic rollover pattern.
+</div>
+{% endif %}
 <h2>{{ zone.name }}</h2>
 <p class="meta">
   Key directory: <code>{{ zone.key_dir }}</code><br>
@@ -58,7 +68,7 @@
 <h3>Rollover view</h3>
 <p class="meta">
   Every observed key on a time axis, grouped by <code>(role, algorithm)</code>,
-  subdivided into <em>pre-publication / published / active / retired / removed</em>
+  subdivided into <em>pre-published / published / active / retired / removed</em>
   phases. KSK rows carry a thin DS-at-parent overlay stripe showing exactly when
   the chain of trust was complete. Simultaneous active phases across two
   algorithms are highlighted to make algorithm rollovers pop at a glance.

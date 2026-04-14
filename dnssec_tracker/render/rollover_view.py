@@ -39,27 +39,27 @@ from ..models import Event, Key
 # CSS custom properties the rest of the app uses so theme changes
 # propagate for free.
 PHASE_FILL = {
-    "pre-publication": "#c8c8c8",
+    "pre-published": "#c8c8c8",
     "published": "var(--rndc)",          # warm amber-ish in both palettes
     "active": "var(--state)",            # the "doing its job" green
-    "to-be-deleted": "var(--named)",     # orange — not signing, scheduled for delete
-    "past-deletion-date": "#8b5a5a",     # muted dusty red — key should be gone
+    "inactive": "var(--named)",     # orange — not signing, scheduled for delete
+    "removed": "#8b5a5a",     # muted dusty red — key should be gone
 }
 
 PHASE_DESCRIPTION = {
-    "pre-publication": "generated but not yet in the DNSKEY RRset",
+    "pre-published": "generated but not yet in the DNSKEY RRset",
     "published": "DNSKEY visible but not yet signing",
     "active": "signing DNSKEY / zone data",
-    "to-be-deleted": "not signing, published for resolver caches, awaiting delete",
-    "past-deletion-date": "past scheduled delete time — should no longer be in the zone",
+    "inactive": "not signing, published for resolver caches, awaiting delete",
+    "removed": "past scheduled delete time — should no longer be in the zone",
 }
 
 PHASE_LABEL = {
-    "pre-publication": "pre-publication",
+    "pre-published": "pre-published",
     "published": "published",
     "active": "active",
-    "to-be-deleted": "to be deleted",
-    "past-deletion-date": "past deletion date",
+    "inactive": "inactive",
+    "removed": "removed",
 }
 
 # Event types that the DS-at-parent overlay cares about.
@@ -152,7 +152,7 @@ def _phase_segments_for_key(
         # but the key-file values fill in *scheduled* boundaries so a
         # key that hasn't yet crossed, say, its Active time still shows
         # the correct upcoming phase break instead of collapsing into
-        # an endless "pre-publication" segment.
+        # an endless "pre-published" segment.
         if isinstance(snapshot.get("timings"), dict):
             timings = snapshot["timings"]
 
@@ -247,7 +247,7 @@ def _phase_segments_for_key(
 
     # Observation-based refinement. BIND often writes ``Generated``,
     # ``Published``, and ``Active`` onto the same instant (the moment
-    # the key is loaded, during a pre-publication rollover setup) —
+    # the key is loaded, during a pre-published rollover setup) —
     # the raw state-file timestamps then collapse gen/pub/act into a
     # single point and the earlier phases become zero-width, which
     # the segment builder drops. The user's observation was: "bars
@@ -365,15 +365,15 @@ def _phase_segments_for_key(
     # Enforce monotonicity — downstream maths assumes t_i <= t_{i+1}.
     # Any out-of-order timestamp clamps forward to the previous one.
     boundaries: list[tuple[str, datetime | None]] = [
-        ("pre-publication", gen),
+        ("pre-published", gen),
         ("published", pub),
         ("active", act),
-        ("to-be-deleted", ret),        # Inactive -> Delete
-        ("past-deletion-date", rem),   # past Delete, renders (no longer terminal)
+        ("inactive", ret),        # Inactive -> Delete
+        ("removed", rem),   # past Delete, renders (no longer terminal)
     ]
 
     # Forward-fill: if "published" is missing but "active" exists, the
-    # "pre-publication" phase runs straight to "active" and "published"
+    # "pre-published" phase runs straight to "active" and "published"
     # is skipped.
     cleaned: list[tuple[str, datetime]] = []
     last = None
@@ -398,7 +398,7 @@ def _phase_segments_for_key(
             t1 = cleaned[i + 1][1]
         else:
             # Last boundary extends to window_end. This includes
-            # ``past-deletion-date``: a key whose scheduled Delete has
+            # ``removed``: a key whose scheduled Delete has
             # passed keeps rendering as that phase all the way to the
             # chart's right edge so the operator can *see* that the
             # key is overdue for removal — previously that segment was
@@ -793,7 +793,7 @@ def render_rollover_view(
             )
 
             # Lookup overdue state for this key tag (if any). Only
-            # "past-deletion-date" segments get the lingering
+            # "removed" segments get the lingering
             # treatment — earlier phases render as normal even if the
             # key will eventually end up overdue.
             overdue_state = None
@@ -803,7 +803,7 @@ def render_rollover_view(
             segs = per_key_segments[(k.zone, k.key_tag, k.role)]
 
             # Minimum visible width for a phase segment. On a wide
-            # chart (a year or more), a pre-publication phase of a
+            # chart (a year or more), a pre-published phase of a
             # few days projects to only 1-2 pixels and disappears
             # visually next to the months-long active bar — the user
             # reported seeing "one color bar for the whole
@@ -843,7 +843,7 @@ def render_rollover_view(
                 w = max(1.0, x1 - x0)
 
                 is_lingering = (
-                    name == "past-deletion-date"
+                    name == "removed"
                     and overdue_state is not None
                     and overdue_state.value != "none"
                 )
@@ -855,8 +855,8 @@ def render_rollover_view(
                     # bold stroke so this reads from across the room.
                     fill = "#c43030"
                     extra_attrs = (
-                        ' class="phase phase-past-deletion-date phase-lingering"'
-                        f' data-phase="past-deletion-date"'
+                        ' class="phase phase-removed phase-lingering"'
+                        f' data-phase="removed"'
                         f' data-lingering="{overdue_state.value}"'
                     )
                     fill_opacity = "0.92"
@@ -953,11 +953,11 @@ def render_rollover_view(
     legend_y = total_height - 14
     lx = margin_left
     legend_order = [
-        "pre-publication",
+        "pre-published",
         "published",
         "active",
-        "to-be-deleted",
-        "past-deletion-date",
+        "inactive",
+        "removed",
     ]
     for name in legend_order:
         fill = PHASE_FILL[name]

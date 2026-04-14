@@ -4,7 +4,7 @@ Seeds a DB with a KSK whose scheduled Delete is in the past AND whose
 DNSKEY is still observed at the zone apex via the dns_probe snapshot.
 Verifies the warning banner renders on /zones/{zone},
 /zones/{zone}/keys/{tag}, and in the HTML report, and that the
-rollover view's past-deletion-date bar carries the
+rollover view's removed bar carries the
 `phase-lingering` class so the alarming red treatment kicks in.
 """
 
@@ -125,11 +125,11 @@ def test_zone_rollover_bar_marks_lingering_phase(seeded):
     app, _db, _cfg = seeded
     with TestClient(app) as client:
         body = client.get("/zones/example.com").text
-    # The rollover renderer flags the past-deletion-date segment with
+    # The rollover renderer flags the removed segment with
     # the phase-lingering class when overdue_by_tag is set.
     assert "phase-lingering" in body
     assert 'data-lingering=' in body
-    # The label switches from "past deletion date" to OVERDUE-style text.
+    # The label switches from "removed" to OVERDUE-style text.
     assert "OVERDUE" in body
 
 
