@@ -473,6 +473,69 @@ def _ds_overlay_segments(
     return clamped
 
 
+def _ds_overlap_intervals(
+    per_key_ds: dict,
+) -> list[tuple[datetime, datetime]]:
+    """Given every KSK's DS live-ranges, return the time intervals
+    during which *two or more* keys simultaneously have DS at the
+    parent. Used to shade the DS stripes so rollover overlaps are
+    visually obvious.
+
+    Sweep-line over appearance/disappearance events: increment on
+    range start, decrement on end, mark the span whenever depth
+    hits 2+.
+    """
+    events: list[tuple[datetime, int]] = []
+    for ranges in per_key_ds.values():
+        for a, b in ranges:
+            events.append((a, +1))
+            events.append((b, -1))
+    # Sort by time; -1 before +1 at the same instant so adjacent
+    # (but not overlapping) ranges don't register as an overlap.
+    events.sort(key=lambda t: (t[0], t[1]))
+
+    depth = 0
+    overlap_start: datetime | None = None
+    out: list[tuple[datetime, datetime]] = []
+    for t, delta in events:
+        prev = depth
+        depth += delta
+        if depth >= 2 and prev < 2:
+            overlap_start = t
+        elif depth < 2 and prev >= 2 and overlap_start is not None:
+            if t > overlap_start:
+                out.append((overlap_start, t))
+            overlap_start = None
+    return out
+
+
+def _split_ds_segment_by_overlap(
+    a: datetime,
+    b: datetime,
+    overlaps: list[tuple[datetime, datetime]],
+) -> list[tuple[datetime, datetime, bool]]:
+    """Chop a single DS live range ``[a, b)`` into sub-intervals
+    tagged with ``is_overlap``. Non-overlapping chunks render as
+    solid blue; overlapping chunks render as the stripe pattern.
+    """
+    # Overlaps intersecting this segment, clipped to its bounds.
+    clipped = sorted(
+        (max(a, s), min(b, e))
+        for s, e in overlaps
+        if s < b and e > a
+    )
+    out: list[tuple[datetime, datetime, bool]] = []
+    cursor = a
+    for s, e in clipped:
+        if s > cursor:
+            out.append((cursor, s, False))
+        out.append((s, e, True))
+        cursor = e
+    if cursor < b:
+        out.append((cursor, b, False))
+    return out
+
+
 # ----- empty / placeholder SVG -------------------------------------------
 
 
@@ -585,6 +648,14 @@ def render_rollover_view(
                 k, events, t_start, t_end,
             )
 
+    # Time intervals where two or more KSKs simultaneously had DS
+    # records at the parent — the DS-stripe overlap regions. Used
+    # below to render those portions of each KSK's DS stripe with a
+    # blue/white diagonal pattern plus a specific "overlap
+    # <start>→<end>" tooltip, so double-DS rollover states are
+    # visually distinct from single-DS active states.
+    ds_overlap_spans = _ds_overlap_intervals(per_key_ds)
+
     # Any segments at all?
     if not any(per_key_segments.values()):
         return _empty("No key activity in the selected window.")
@@ -645,6 +716,22 @@ def render_rollover_view(
     parts.append(
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {total_height}" '
         f'font-family="sans-serif" font-size="11" class="rollover-view">'
+    )
+    # A diagonal blue/white pattern used for DS-overlap regions —
+    # when two KSKs simultaneously have DS at the parent during a
+    # rollover, the overlap portion of each KSK's DS stripe renders
+    # as stripes so the operator can see the two live DS records
+    # coexist. patternTransform rotates the stripes 45 degrees;
+    # userSpaceOnUse lets the pattern tile consistently across
+    # different-sized rects.
+    parts.append(
+        '<defs>'
+        '<pattern id="ds-overlap-stripes" patternUnits="userSpaceOnUse" '
+        'width="8" height="8" patternTransform="rotate(45)">'
+        '<rect width="8" height="8" fill="var(--accent)"/>'
+        '<rect x="0" y="0" width="4" height="8" fill="#ffffff" fill-opacity="0.65"/>'
+        '</pattern>'
+        '</defs>'
     )
 
     # Date-range label — right-aligned at the top of the chart area,
@@ -917,16 +1004,40 @@ def render_rollover_view(
                     f'stroke="var(--border)" stroke-width="0.3"/>'
                 )
                 for a, b in per_key_ds[(k.zone, k.key_tag, k.role)]:
-                    x0 = x_for(a)
-                    x1 = x_for(b)
-                    w = max(1.0, x1 - x0)
-                    parts.append(
-                        f'<rect class="ds-overlay" data-ds="live" '
-                        f'x="{x0:.1f}" y="{stripe_y}" width="{w:.1f}" '
-                        f'height="{ds_stripe_h}" fill="var(--accent)" fill-opacity="0.85">'
-                        f'<title>DS observed at parent {a.strftime("%Y-%m-%d %H:%M")} '
-                        f'\u2192 {b.strftime("%Y-%m-%d %H:%M")} UTC</title></rect>'
-                    )
+                    # Split each live DS range into sub-intervals:
+                    # solid blue where only this KSK's DS is at the
+                    # parent, and blue/white diagonal stripes where a
+                    # second KSK's DS is *also* at the parent at the
+                    # same time — the visible double-DS rollover
+                    # overlap window.
+                    for sa, sb, is_overlap in _split_ds_segment_by_overlap(
+                        a, b, ds_overlap_spans,
+                    ):
+                        x0 = x_for(sa)
+                        x1 = x_for(sb)
+                        w = max(1.0, x1 - x0)
+                        if is_overlap:
+                            fill = "url(#ds-overlap-stripes)"
+                            data_ds = "overlap"
+                            tip = (
+                                f"DS overlap with another KSK "
+                                f"{sa.strftime('%Y-%m-%d %H:%M')} "
+                                f"\u2192 {sb.strftime('%Y-%m-%d %H:%M')} UTC"
+                            )
+                        else:
+                            fill = "var(--accent)"
+                            data_ds = "live"
+                            tip = (
+                                f"DS observed at parent "
+                                f"{a.strftime('%Y-%m-%d %H:%M')} "
+                                f"\u2192 {b.strftime('%Y-%m-%d %H:%M')} UTC"
+                            )
+                        parts.append(
+                            f'<rect class="ds-overlay" data-ds="{data_ds}" '
+                            f'x="{x0:.1f}" y="{stripe_y}" width="{w:.1f}" '
+                            f'height="{ds_stripe_h}" fill="{fill}" fill-opacity="0.85">'
+                            f'<title>{escape(tip)}</title></rect>'
+                        )
                 # Tiny "DS" marker label at the left edge of the stripe.
                 parts.append(
                     f'<text x="{margin_left - 8}" y="{stripe_y + ds_stripe_h:.1f}" '

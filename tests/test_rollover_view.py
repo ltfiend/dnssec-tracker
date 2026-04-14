@@ -840,3 +840,152 @@ def test_minimum_width_does_not_push_bars_past_chart_right_edge():
             f"phase rect runs off the right edge: x={x} w={w} → "
             f"right={x + w}"
         )
+
+
+# --------------------------------------------------------------------------
+# DS overlap striping — when two KSKs simultaneously have DS at
+# the parent (i.e. a double-DS rollover), each KSK's DS stripe
+# renders the overlap portion with a blue/white diagonal pattern
+# plus an "overlap" tooltip with the exact intersection window.
+# --------------------------------------------------------------------------
+
+from dnssec_tracker.render.rollover_view import (
+    _ds_overlap_intervals,
+    _split_ds_segment_by_overlap,
+)
+
+
+def test_ds_overlap_intervals_finds_simultaneous_ranges():
+    """Given two KSKs' DS ranges that overlap in the middle, the
+    sweep-line finds exactly the intersection window."""
+    per_key = {
+        ("z.example", 11111, "KSK"): [
+            (datetime(2026, 1, 10, tzinfo=timezone.utc),
+             datetime(2026, 3, 15, tzinfo=timezone.utc)),
+        ],
+        ("z.example", 22222, "KSK"): [
+            (datetime(2026, 3, 1, tzinfo=timezone.utc),
+             datetime(2026, 5, 20, tzinfo=timezone.utc)),
+        ],
+    }
+    overlaps = _ds_overlap_intervals(per_key)
+    assert overlaps == [
+        (datetime(2026, 3, 1, tzinfo=timezone.utc),
+         datetime(2026, 3, 15, tzinfo=timezone.utc)),
+    ]
+
+
+def test_ds_overlap_intervals_empty_when_ranges_dont_intersect():
+    """Consecutive but non-overlapping DS ranges produce no
+    overlap intervals (covering the demo scenario's shape where
+    one KSK's DS cleanly hands off to the next)."""
+    per_key = {
+        ("z.example", 11111, "KSK"): [
+            (datetime(2026, 1, 10, tzinfo=timezone.utc),
+             datetime(2026, 3, 1, tzinfo=timezone.utc)),
+        ],
+        ("z.example", 22222, "KSK"): [
+            # Starts exactly when the other ends.
+            (datetime(2026, 3, 1, tzinfo=timezone.utc),
+             datetime(2026, 5, 20, tzinfo=timezone.utc)),
+        ],
+    }
+    assert _ds_overlap_intervals(per_key) == []
+
+
+def test_split_ds_segment_by_overlap_carves_three_chunks():
+    """A single DS range that contains an overlap in the middle
+    should split into three sub-intervals: solid, overlap, solid."""
+    a = datetime(2026, 1, 10, tzinfo=timezone.utc)
+    b = datetime(2026, 5, 15, tzinfo=timezone.utc)
+    overlaps = [
+        (datetime(2026, 3, 1, tzinfo=timezone.utc),
+         datetime(2026, 3, 15, tzinfo=timezone.utc)),
+    ]
+    out = _split_ds_segment_by_overlap(a, b, overlaps)
+    # Three sub-intervals: solid up to 03-01, overlap 03-01..03-15,
+    # solid 03-15..05-15.
+    assert len(out) == 3
+    (s0, e0, o0), (s1, e1, o1), (s2, e2, o2) = out
+    assert (s0, e0, o0) == (a, overlaps[0][0], False)
+    assert (s1, e1, o1) == (overlaps[0][0], overlaps[0][1], True)
+    assert (s2, e2, o2) == (overlaps[0][1], b, False)
+
+
+def test_rendered_svg_includes_overlap_pattern_and_tooltip():
+    """End-to-end: two overlapping KSKs render with the diagonal
+    pattern fill and an overlap-specific tooltip on both KSK rows."""
+    k1 = Key(zone="z.example", key_tag=11111, role="KSK", algorithm=13,
+             key_id="Kz.example.+013+11111",
+             first_seen="2026-01-01T00:00:00Z")
+    k2 = Key(zone="z.example", key_tag=22222, role="KSK", algorithm=13,
+             key_id="Kz.example.+013+22222",
+             first_seen="2026-02-01T00:00:00Z")
+    events = [
+        Event(ts="2026-01-10T00:00:00Z", source="dns",
+              event_type="dns_ds_appeared_at_parent", summary="",
+              zone="z.example", key_tag=11111),
+        Event(ts="2026-03-15T00:00:00Z", source="dns",
+              event_type="dns_ds_disappeared_at_parent", summary="",
+              zone="z.example", key_tag=11111),
+        Event(ts="2026-03-01T00:00:00Z", source="dns",
+              event_type="dns_ds_appeared_at_parent", summary="",
+              zone="z.example", key_tag=22222),
+        Event(ts="2026-05-20T00:00:00Z", source="dns",
+              event_type="dns_ds_disappeared_at_parent", summary="",
+              zone="z.example", key_tag=22222),
+    ]
+    snap = {"fields": {"Generated": "20260101000000",
+                       "GoalState": "omnipresent"}}
+    svg = render_rollover_view(
+        events, [k1, k2],
+        {"z.example#11111#KSK": snap, "z.example#22222#KSK": snap},
+        from_ts="2026-01-01T00:00:00Z", to_ts="2026-06-01T00:00:00Z",
+        today=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    # The defs block with the pattern is emitted once.
+    assert '<pattern id="ds-overlap-stripes"' in svg
+    # Two overlap rects (one per KSK row) use the pattern fill.
+    assert svg.count('url(#ds-overlap-stripes)') == 2
+    # Overlap tooltips name the exact intersection window.
+    assert svg.count(
+        "DS overlap with another KSK 2026-03-01 00:00 "
+        "\u2192 2026-03-15 00:00 UTC"
+    ) == 2
+    # Non-overlapping portions still render as data-ds="live".
+    assert svg.count('data-ds="live"') == 2
+    assert svg.count('data-ds="overlap"') == 2
+
+
+def test_non_overlapping_ds_ranges_produce_no_pattern_rects():
+    """Demo scenario shape — sequential non-overlapping DS ranges
+    — must NOT emit any overlap rects. Regression guard so the
+    feature doesn't accidentally fire on clean rollovers."""
+    k1 = Key(zone="z.example", key_tag=11111, role="KSK", algorithm=13,
+             key_id="Kz.example.+013+11111",
+             first_seen="2026-01-01T00:00:00Z")
+    k2 = Key(zone="z.example", key_tag=22222, role="KSK", algorithm=13,
+             key_id="Kz.example.+013+22222",
+             first_seen="2026-03-01T00:00:00Z")
+    events = [
+        Event(ts="2026-01-10T00:00:00Z", source="dns",
+              event_type="dns_ds_appeared_at_parent", summary="",
+              zone="z.example", key_tag=11111),
+        Event(ts="2026-03-01T00:00:00Z", source="dns",
+              event_type="dns_ds_disappeared_at_parent", summary="",
+              zone="z.example", key_tag=11111),
+        Event(ts="2026-03-01T00:00:00Z", source="dns",
+              event_type="dns_ds_appeared_at_parent", summary="",
+              zone="z.example", key_tag=22222),
+    ]
+    snap = {"fields": {"Generated": "20260101000000",
+                       "GoalState": "omnipresent"}}
+    svg = render_rollover_view(
+        events, [k1, k2],
+        {"z.example#11111#KSK": snap, "z.example#22222#KSK": snap},
+        from_ts="2026-01-01T00:00:00Z", to_ts="2026-05-01T00:00:00Z",
+        today=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+    assert 'data-ds="overlap"' not in svg
+    # Solid live DS stripes still render normally.
+    assert svg.count('data-ds="live"') >= 2

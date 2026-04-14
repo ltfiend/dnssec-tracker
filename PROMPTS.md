@@ -247,3 +247,9 @@ We seem to be having some problems with this, the charts are still strange but i
 
 ---
 
+## 2026-04-14 11:07:54
+
+This looks really good.  There's one interesting corner case, DS records need to overlap, the demo DS records do not.  That's fine, it's just a demo.  But, for the blue DS bars can we show overlap between DS records in maybe a blue / white diagnol pattern.  Also when hovering it should show the start / end time of the overlap.
+
+---
+
