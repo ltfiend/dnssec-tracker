@@ -63,5 +63,61 @@
       });
     })();
   </script>
+  {#
+    Event-timeline floating tooltip. Each cluster <g> in the
+    swim-lane SVG carries a ``data-tip`` attribute with pre-
+    escaped HTML describing its members. On hover, position a
+    themed <div> near the cursor with that HTML; on leave, hide
+    it. A single <div> is shared across every chart on the page.
+
+    WeasyPrint never runs this — the PDF export falls back to the
+    <title> element inside each cluster, which renders as a native
+    tooltip in the PDF viewer.
+  #}
+  <script>
+    (function () {
+      var tip = document.createElement('div');
+      tip.className = 'evt-floating-tip';
+      tip.style.cssText = 'position:fixed; display:none; pointer-events:none; z-index:1000;';
+      document.body.appendChild(tip);
+      var active = null;
+      document.addEventListener('mouseover', function (e) {
+        var g = e.target.closest
+          ? e.target.closest('.event-timeline .evt-cluster')
+          : null;
+        if (!g || g === active) return;
+        var content = g.getAttribute('data-tip');
+        if (!content) return;
+        active = g;
+        tip.innerHTML = content;
+        tip.style.display = 'block';
+      });
+      document.addEventListener('mousemove', function (e) {
+        if (tip.style.display !== 'block') return;
+        var r = tip.getBoundingClientRect();
+        var x = e.clientX + 14;
+        var y = e.clientY + 14;
+        if (x + r.width > window.innerWidth - 8) x = e.clientX - r.width - 14;
+        if (y + r.height > window.innerHeight - 8) y = e.clientY - r.height - 14;
+        if (x < 4) x = 4;
+        if (y < 4) y = 4;
+        tip.style.left = x + 'px';
+        tip.style.top = y + 'px';
+      });
+      document.addEventListener('mouseout', function (e) {
+        if (!active) return;
+        var leaving = e.target.closest
+          ? e.target.closest('.event-timeline .evt-cluster')
+          : null;
+        if (leaving !== active) return;
+        var related = e.relatedTarget && e.relatedTarget.closest
+          ? e.relatedTarget.closest('.event-timeline .evt-cluster')
+          : null;
+        if (related === active) return;
+        tip.style.display = 'none';
+        active = null;
+      });
+    })();
+  </script>
 </body>
 </html>

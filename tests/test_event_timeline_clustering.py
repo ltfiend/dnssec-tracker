@@ -1,11 +1,16 @@
-"""Clustering behaviour of the event-timeline SVG renderer.
+"""Per-lane clustering behaviour.
 
-Events whose pixel x-coordinates land within ``cluster_px`` of each
-other collapse into a single cluster circle. This keeps a mass state
-transition (KRRSIGState + DNSKEYState + DSState + GoalState ticking in
-the same rndc poll) legible instead of stacking a dozen overlapping
-dots. Singletons must still render identically to the pre-clustering
-baseline.
+In the swim-lane timeline, clustering is scoped to a single lane —
+events from different sources can't merge into one cluster because
+they live on different horizontal lanes by construction. Within a
+lane, events whose pixel x-coordinates are within ``cluster_px`` of
+each other still collapse to a single circle (the mass-transition
+legibility fix for KRRSIG + DNSKEY + DSState + GoalState all
+ticking in the same rndc poll).
+
+Inline per-event text labels are deliberately absent — detail
+belongs in the tooltip, not floating text on the chart. The lane
+label on the left identifies the category.
 """
 
 from __future__ import annotations
@@ -17,24 +22,20 @@ from dnssec_tracker.models import Event
 from dnssec_tracker.render.event_timeline import render_event_timeline
 
 
-_DATA_CIRCLE_RE = re.compile(
+# Matches the primary event-cluster <circle>, which always carries
+# ``stroke="currentColor"`` to separate it from the small
+# milestone-cap circles (which have no stroke).
+_CLUSTER_CIRCLE_RE = re.compile(
     r'<circle cx="([0-9.]+)" cy="([0-9.]+)" r="([0-9.]+)" '
-    r'fill="[^"]+" stroke="currentColor"'
+    r'fill="([^"]+)"[^/]*?stroke="currentColor"'
 )
 
 
-def _circles(svg: str) -> list[tuple[float, float, float]]:
-    """Return every data-circle in the SVG as (cx, cy, r) tuples.
-
-    The legend at the bottom of the SVG uses its own short ``<circle
-    cx=".." cy=".." r="4" fill=".." />`` form without the
-    ``stroke="currentColor"`` attribute, so this filter targets the
-    data-circles only.
-    """
-
+def _circles(svg: str) -> list[tuple[float, float, float, str]]:
+    """Return every cluster circle as ``(cx, cy, r, fill)``."""
     return [
-        (float(cx), float(cy), float(r))
-        for cx, cy, r in _DATA_CIRCLE_RE.findall(svg)
+        (float(cx), float(cy), float(r), fill)
+        for cx, cy, r, fill in _CLUSTER_CIRCLE_RE.findall(svg)
     ]
 
 
@@ -50,11 +51,13 @@ def _mk(ts: str, source: str, et: str = "state_changed",
     )
 
 
-# ---- Cluster vs. singleton --------------------------------------------
+# ---- Cluster vs. singleton -------------------------------------------
 
 
-def test_many_events_at_same_ts_collapse_into_one_circle():
-    """Four fields ticking in the same rndc poll → one circle, not four."""
+def test_many_events_at_same_ts_in_same_lane_collapse_into_one_circle():
+    """Four state-file fields ticking in the same rndc poll —
+    same source, same timestamp — collapse into a single cluster
+    circle in the state lane."""
 
     ts = "2026-04-10T12:00:00Z"
     events = [
@@ -63,16 +66,13 @@ def test_many_events_at_same_ts_collapse_into_one_circle():
         _mk(ts, "state", "state_changed", summary="KRRSIGState rumoured -> omnipresent"),
         _mk(ts, "state", "state_changed", summary="DSState rumoured -> omnipresent"),
     ]
-    # Give the chart a wide window so same-ts events absolutely
-    # project to the same x.
     svg = render_event_timeline(
         events, from_ts="2026-04-10T00:00:00Z", to_ts="2026-04-10T23:59:59Z"
     )
-
     circles = _circles(svg)
-    assert len(circles) == 1, f"expected one cluster circle, got {len(circles)}"
+    assert len(circles) == 1
 
-    # Tooltip (the <title> child) must list every member.
+    # <title> fallback lists every member.
     title_match = re.search(r"<title>(.*?)</title>", svg, re.DOTALL)
     assert title_match is not None
     title_text = title_match.group(1)
@@ -83,8 +83,8 @@ def test_many_events_at_same_ts_collapse_into_one_circle():
 
 
 def test_events_spread_wide_do_not_cluster():
-    """Four events a day apart each → four separate circles."""
-
+    """Four events a week apart each → four separate circles in
+    their lane."""
     events = [
         _mk("2026-04-01T00:00:00Z", "state", summary="day 1"),
         _mk("2026-04-08T00:00:00Z", "state", summary="day 8"),
@@ -94,8 +94,29 @@ def test_events_spread_wide_do_not_cluster():
     svg = render_event_timeline(
         events, from_ts="2026-04-01T00:00:00Z", to_ts="2026-04-30T00:00:00Z"
     )
+    assert len(_circles(svg)) == 4
+
+
+def test_events_across_sources_land_in_separate_lanes_not_one_cluster():
+    """With swim lanes, events from different sources at the same
+    timestamp cannot share a cluster — each source has its own
+    horizontal lane. Four separate circles with different y
+    coordinates (one per lane)."""
+    ts = "2026-04-10T12:00:00Z"
+    events = [
+        _mk(ts, "state", summary="s"),
+        _mk(ts, "rndc",  summary="r"),
+        _mk(ts, "dns",   summary="d"),
+        _mk(ts, "syslog", summary="y"),
+    ]
+    svg = render_event_timeline(
+        events, from_ts="2026-04-10T00:00:00Z", to_ts="2026-04-10T23:59:59Z"
+    )
     circles = _circles(svg)
     assert len(circles) == 4
+    # Each circle sits at a different cy (one per lane).
+    ys = sorted({cy for _, cy, _, _ in circles})
+    assert len(ys) == 4
 
 
 # ---- Count badge -----------------------------------------------------
@@ -107,27 +128,27 @@ def test_cluster_count_badge_present_for_multi_member():
     svg = render_event_timeline(
         events, from_ts="2026-04-10T00:00:00Z", to_ts="2026-04-10T23:59:59Z"
     )
-    # A text element with the count, rendered inside the cluster circle.
-    assert re.search(r"<text [^>]*>5</text>", svg), (
-        "cluster count badge for count=5 missing"
-    )
+    # The <text class="evt-count-badge">5</text> sits inside the
+    # cluster circle.
+    assert re.search(
+        r'<text class="evt-count-badge"[^>]*>5</text>', svg,
+    ), "cluster count badge for count=5 missing"
 
 
 def test_singleton_has_no_count_badge():
     svg = render_event_timeline([
         _mk("2026-04-10T12:00:00Z", "state", summary="solo"),
     ])
-    # The only <text> elements should be the axis-title, tick labels,
-    # and the legend — none of them should be the bare digit "1".
-    # Grep for a <text ...>1</text> and assert it's absent.
-    assert not re.search(r"<text [^>]*>1</text>", svg)
+    # No count badge rendered for count==1.
+    assert 'class="evt-count-badge"' not in svg
 
 
 # ---- Radius scaling --------------------------------------------------
 
 
 def test_cluster_radius_scales_with_sqrt_of_count():
-    """A 9-member cluster should be ~3x the base radius (sqrt(9))."""
+    """A 9-member cluster should be ~3x the base radius, capped
+    at the max_radius constant in the renderer."""
 
     ts = "2026-04-10T12:00:00Z"
     events = [_mk(ts, "state", summary=f"ev {i}") for i in range(9)]
@@ -136,13 +157,13 @@ def test_cluster_radius_scales_with_sqrt_of_count():
     )
     circles = _circles(svg)
     assert len(circles) == 1
-    _, _, radius = circles[0]
-    base = 4.5
-    expected = base * math.sqrt(9)  # ~13.5, but capped at 12
-    # Either hits the cap or is close to 3x base — both are fine.
-    assert radius <= 12.001
-    assert radius >= base * 2.5, (
-        f"radius {radius} should be ~3x base {base}, got only {radius / base:.2f}x"
+    _, _, radius, _ = circles[0]
+    # The renderer uses base_radius=5.0, max_radius=11.0 — so
+    # sqrt(9)*5 = 15 gets capped at 11. Assert that clusters
+    # genuinely grow (2x+ the base is a lower bound).
+    assert radius <= 11.001
+    assert radius >= 5.0 * 2.0, (
+        f"cluster radius {radius} did not scale with cluster size"
     )
 
 
@@ -150,60 +171,62 @@ def test_cluster_radius_scales_with_sqrt_of_count():
 
 
 def test_uniform_source_cluster_uses_source_colour():
+    """A cluster in the state lane is filled with the state
+    colour variable — lanes are single-source by construction."""
     ts = "2026-04-10T12:00:00Z"
     events = [_mk(ts, "state", summary=f"ev {i}") for i in range(3)]
     svg = render_event_timeline(
         events, from_ts="2026-04-10T00:00:00Z", to_ts="2026-04-10T23:59:59Z"
     )
-    # Data circle (the one with count text 3 inside) is filled with
-    # var(--state), not var(--muted).
-    data_circle = re.search(
-        r'<circle cx="[0-9.]+" cy="[0-9.]+" r="[0-9.]+" '
-        r'fill="([^"]+)" stroke="currentColor"',
-        svg,
-    )
-    assert data_circle is not None
-    assert data_circle.group(1) == "var(--state)"
+    circles = _circles(svg)
+    assert len(circles) == 1
+    _, _, _, fill = circles[0]
+    assert fill == "var(--state)"
 
 
-def test_mixed_source_cluster_uses_muted_colour():
-    ts = "2026-04-10T12:00:00Z"
-    events = [
-        _mk(ts, "state", summary="ev 1"),
-        _mk(ts, "dns",   summary="ev 2"),
-        _mk(ts, "rndc",  summary="ev 3"),
-    ]
-    svg = render_event_timeline(
-        events, from_ts="2026-04-10T00:00:00Z", to_ts="2026-04-10T23:59:59Z"
-    )
-    data_circle = re.search(
-        r'<circle cx="[0-9.]+" cy="[0-9.]+" r="[0-9.]+" '
-        r'fill="([^"]+)" stroke="currentColor"',
-        svg,
-    )
-    assert data_circle is not None
-    assert data_circle.group(1) == "var(--muted)"
+# Note: the pre-lane-redesign test_mixed_source_cluster_uses_muted_colour
+# was deleted. With swim lanes, mixed-source clusters cannot exist —
+# events from different sources live on different lanes.
 
 
-# ---- Singleton still behaves like the legacy renderer ---------------
+# ---- Singleton rendering --------------------------------------------
 
 
-def test_singleton_inline_label_preserved_for_major_type():
-    """A solo state_changed with field+new detail still gets its
-    ``KSK12345 GoalState=omnipresent`` inline label — the pre-
-    clustering baseline for sparse streams."""
+def test_singleton_has_no_inline_text_label():
+    """The swim-lane redesign removed all per-event inline labels.
+    A solo state_changed renders as a bare circle (plus milestone
+    flag if applicable); detail goes in the tooltip."""
 
     svg = render_event_timeline([
         Event(
             ts="2026-04-10T12:00:00Z",
             source="state",
             event_type="state_changed",
-            summary="goal",
+            summary="KSK GoalState -> omnipresent",
             zone="example.com",
             key_tag=12345,
             key_role="KSK",
             detail={"field": "GoalState", "new": "omnipresent"},
         )
     ])
-    assert "KSK12345" in svg
-    assert "GoalState=omnipresent" in svg
+    # No free-standing text label carrying the detail — <title>
+    # and data-tip both have it, but no floating <text>.
+    # Scan every non-chrome <text>: title strip, lane label, tick
+    # labels, count badges. None should contain the summary.
+    free_text_nodes = re.findall(r'<text[^>]*>([^<]+)</text>', svg)
+    for t in free_text_nodes:
+        assert "KSK GoalState" not in t
+        assert "GoalState -> omnipresent" not in t
+    # The detail still exists in the tooltip paths.
+    assert svg.count('<title>') == 1
+    assert 'data-tip="' in svg
+
+
+def test_every_cluster_wraps_in_evt_cluster_group():
+    """Each cluster is wrapped in a ``<g class="evt-cluster">`` so
+    the page-level tooltip JS can attach listeners cleanly."""
+    svg = render_event_timeline([
+        _mk("2026-04-10T12:00:00Z", "state", summary="a"),
+        _mk("2026-04-10T14:00:00Z", "rndc", summary="b"),
+    ])
+    assert svg.count('<g class="evt-cluster"') == 2

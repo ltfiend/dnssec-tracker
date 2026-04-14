@@ -486,6 +486,14 @@ table th { background: var(--surface-alt); font-weight: 600; }
 }
 
 /* ---- Event timeline chart -------------------------------------- */
+/*
+ * The timeline is a swim-lane chart: one lane per event source,
+ * stacked vertically, with events rendered as dots inside their
+ * lane. The top-level .event-timeline class wraps the SVG output
+ * from render_event_timeline(); the inner elements (.evt-lane-
+ * label, .evt-cluster, .evt-milestone-flag, etc.) are tagged so
+ * styling stays in CSS rather than inline on the SVG nodes.
+ */
 .event-timeline {
   width: 100%;
   max-width: 100%;
@@ -493,6 +501,51 @@ table th { background: var(--surface-alt); font-weight: 600; }
   background: var(--surface);
   border: 1px solid var(--border);
   padding: 0.3rem;
+}
+.event-timeline .evt-lane-label {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 11px;
+}
+.event-timeline .evt-cluster { cursor: crosshair; }
+/*
+ * Hover highlight: the cluster circle grows slightly when the
+ * cursor is over the wrapping <g>. Use a CSS r override —
+ * supported as a presentation attribute in SVG 2 and honoured by
+ * every current browser engine. WeasyPrint doesn't fire :hover so
+ * the PDF export stays with the rendered radius.
+ */
+.event-timeline .evt-cluster > circle { transition: r 0.1s ease-out; }
+.event-timeline .evt-cluster:hover > circle { r: 8; }
+
+/*
+ * Floating JS tooltip. The page-level script in layout.html
+ * appends one .evt-floating-tip <div> to <body> and toggles its
+ * visibility on mouseover/mouseout of any .event-timeline
+ * .evt-cluster. The server-rendered HTML payload lives in the
+ * cluster's data-tip attribute, so this .evt-floating-tip only
+ * needs the visual styling here.
+ *
+ * Stays out of WeasyPrint's way because the script that creates
+ * this element is never executed by WeasyPrint — the PDF path
+ * uses the <title> fallback inside each cluster instead.
+ */
+.evt-floating-tip {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 8px 12px;
+  max-width: 420px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+.evt-floating-tip strong { color: var(--accent); }
+.evt-floating-tip hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
 }
 
 /* ---- Rollover view ------------------------------------------------ */

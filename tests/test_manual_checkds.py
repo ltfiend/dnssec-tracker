@@ -174,9 +174,9 @@ def test_syslog_unrelated_named_line_falls_back_to_generic(tmp_path):
 # ---- visual: label-worthy in the event timeline -------------------
 
 
-def test_named_manual_checkds_is_label_worthy():
+def test_named_manual_checkds_is_a_milestone_event_type():
     """Manual state changes are rare and important — they must be
-    in the event-timeline's label-worthy set so the inline label
-    renders on the chart."""
-    from dnssec_tracker.render.event_timeline import LABEL_WORTHY_TYPES
-    assert "named_manual_checkds" in LABEL_WORTHY_TYPES
+    in the event-timeline's milestone set so the chart emits the
+    small vertical flag above the dot instead of a bare circle."""
+    from dnssec_tracker.render.event_timeline import MILESTONE_TYPES
+    assert "named_manual_checkds" in MILESTONE_TYPES

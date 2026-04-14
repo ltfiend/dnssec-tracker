@@ -1,35 +1,41 @@
-"""Chronological event-timeline chart (SVG).
+"""Chronological event-timeline chart — horizontal swim lanes per
+source.
 
-A single horizontal axis covering the window, with every event drawn
-as a coloured dot at its timestamp. Events whose pixel x-coordinates
-land within ``cluster_px`` of each other collapse into a single
-cluster circle — during a mass state transition (KRRSIGState +
-DNSKEYState + DSState + GoalState all ticking in the same rndc poll)
-this keeps the chart legible instead of stacking a dozen overlapping
-dots. Sparse streams are unaffected: a singleton cluster renders
-identically to a plain dot, with the same colour and inline label for
-the major event types.
+Layout: one dedicated horizontal lane per source present in the
+given event list, each plotted at its own y position. A shared
+time axis runs along the bottom. Events in a lane cluster when
+their pixel x-coordinates land within ``cluster_px`` of each other
+so mass-transition bursts (a KSK rollover ticking a half-dozen
+state fields in the same rndc poll) stay legible.
 
-Clustering is layout-aware — it happens *after* timestamps are
-projected onto the pixel axis — so "two events 200 ms apart on a
-30-day-wide chart" collapse the same way "two events at the exact
-same second on a one-hour chart" do, because both are visually
-indistinguishable anyway.
+Per-event inline labels are gone: the lane's left-edge label
+already identifies the category, and per-event detail lives in a
+hover tooltip. Each cluster ``<g class="evt-cluster">`` carries
+both a ``<title>`` child (PDF / OS-native fallback, unchanged from
+before) and a ``data-tip`` attribute with pre-escaped HTML for the
+page-level JavaScript tooltip hook in ``layout.html``. WeasyPrint
+ignores the JS entirely and renders the ``<title>`` as a PDF
+tooltip, so the export path still works.
 
-Pure Python, no JS — safe for WeasyPrint and the live UI. Cluster
-tooltips are plain SVG ``<title>`` children so WeasyPrint renders
-them into the PDF export untouched.
+Milestone events (key creation, DS transitions at the parent,
+operator-issued checkds commands, file deletion) gain a small
+vertical flag above their dot — visual emphasis without text.
+
+Pure Python, no external dependencies. Safe for WeasyPrint.
 """
 
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from html import escape
 
 from ..models import Event
 
 
+# Colour per source. Matches the dots used elsewhere (calendar,
+# event-log row tints) so the visual vocabulary is consistent.
 SOURCE_COLOR_VAR = {
     "state": "var(--state)",
     "key": "var(--key)",
@@ -39,25 +45,29 @@ SOURCE_COLOR_VAR = {
     "rndc": "var(--rndc)",
 }
 
-# Event types that deserve an inline label (the "major milestones")
-LABEL_WORTHY_TYPES = {
-    "state_changed",
-    "rndc_state_changed",
+# Canonical lane order, top to bottom. File-side sources grouped
+# first, then BIND's own views, then free-form textual sources.
+# Absent sources are skipped — lanes with zero events are not
+# rendered so vertical space grows only with real signal.
+SOURCE_ORDER = ["state", "key", "rndc", "dns", "syslog", "named"]
+
+# Operationally-interesting events that get a small vertical flag
+# above their dot. Chosen to highlight transitions an operator
+# would care about at a glance without adding text to the chart.
+MILESTONE_TYPES = {
     "state_key_observed",
+    "state_key_file_deleted",
     "iodyn_key_created",
     "iodyn_ds_action",
     "iodyn_rndc_reload",
+    "named_manual_checkds",
     "named_dnskey_published",
     "named_dnskey_active",
     "named_dnskey_retired",
-    # Operator-issued `rndc dnssec -checkds ... published|withdrawn`.
-    # Deliberately surfaced because manual state changes are rare
-    # and usually the thing you most want to see when reviewing a
-    # timeline.
-    "named_manual_checkds",
     "dns_ds_appeared_at_parent",
     "dns_ds_disappeared_at_parent",
     "dns_dnskey_appeared_at_zone",
+    "dns_dnskey_disappeared_at_zone",
 }
 
 
@@ -68,96 +78,96 @@ def _parse_ts(ts: str) -> datetime:
         return datetime.now(timezone.utc)
 
 
-def render_event_timeline(
-    events: list[Event],
-    from_ts: str | None = None,
-    to_ts: str | None = None,
-    *,
-    cluster_px: float = 6.0,
-) -> str:
-    """Return an inline SVG fragment for the event timeline.
+def _hhmmss(ts: str) -> str:
+    """Extract ``HH:MM:SS`` from an ISO timestamp for compact
+    tooltip lines."""
+    try:
+        return _parse_ts(ts).strftime("%H:%M:%S")
+    except Exception:  # noqa: BLE001
+        return ts
 
-    ``cluster_px`` is the pixel distance within which two events
-    collapse into a single cluster circle. Default ~6 px — a bit
-    wider than the singleton dot radius so mass-transition bursts
-    merge cleanly without swallowing events that are actually
-    spatially distinct.
+
+def _yyyymmdd_hhmmss(ts: str) -> str:
+    try:
+        return _parse_ts(ts).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:  # noqa: BLE001
+        return ts
+
+
+def _fmt_tick(t: datetime, span_sec: float) -> str:
+    # Pick granularity based on the window width.
+    if span_sec <= 2 * 3600:
+        return t.strftime("%H:%M")
+    if span_sec <= 2 * 86400:
+        return t.strftime("%m-%d %H:%M")
+    if span_sec <= 60 * 86400:
+        return t.strftime("%Y-%m-%d")
+    return t.strftime("%Y-%m")
+
+
+def _empty(message: str) -> str:
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 60" '
+        'font-family="sans-serif" font-size="12" class="event-timeline">'
+        f'<text x="10" y="30" fill="currentColor" fill-opacity="0.6">'
+        f'{escape(message)}</text>'
+        "</svg>"
+    )
+
+
+def _build_data_tip(members: list[Event]) -> str:
+    """Build the pre-escaped HTML for the JS floating tooltip.
+
+    The live-UI JS reads this string off the cluster <g>'s
+    ``data-tip`` attribute and injects it via ``innerHTML``, so
+    every field value is HTML-escaped here. Line structure per
+    member: a bold timestamp + source/type header line, then the
+    event summary below. Members separated by an <hr>.
     """
 
-    if not events:
-        return _empty("No events in the reported window.")
+    lines: list[str] = []
+    for i, m in enumerate(members):
+        if i > 0:
+            lines.append("<hr>")
+        lines.append(
+            f"<strong>{escape(_yyyymmdd_hhmmss(m.ts))}</strong> "
+            f"[{escape(m.source)}] {escape(m.event_type)}"
+        )
+        if m.summary:
+            lines.append(escape(m.summary))
+    return "<br>".join(lines)
 
-    evs = sorted(events, key=lambda e: e.ts)
 
-    t_start = _parse_ts(from_ts) if from_ts else _parse_ts(evs[0].ts)
-    t_end = _parse_ts(to_ts) if to_ts else _parse_ts(evs[-1].ts)
-    if t_end <= t_start:
-        t_end = t_start + timedelta(minutes=1)
-    span_sec = (t_end - t_start).total_seconds()
-
-    # Layout
-    margin_left = 60
-    margin_right = 40
-    margin_top = 40
-    margin_bot = 70
-    width = 920
-    axis_y = 180
-    chart_w = width - margin_left - margin_right
-    chart_h = 260
-    height = chart_h + margin_top + margin_bot
-
-    def x_for(ts: datetime) -> float:
-        return margin_left + ((ts - t_start).total_seconds() / span_sec) * chart_w
-
-    parts: list[str] = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
-        f'font-family="sans-serif" font-size="11" class="event-timeline">'
-    ]
-
-    # Title
-    parts.append(
-        f'<text x="{margin_left}" y="20" font-weight="600" fill="currentColor">'
-        f'{escape(t_start.isoformat())} &#x2192; {escape(t_end.isoformat())}</text>'
+def _build_title_fallback(members: list[Event]) -> str:
+    """Plain-text fallback for the <title> child — same content the
+    live tooltip shows, rendered as the browser's native (OS-sized)
+    tooltip when no JS is present. Also what WeasyPrint picks up
+    for the PDF export."""
+    return "\n".join(
+        f"{_hhmmss(m.ts)} [{m.source}] {m.event_type}: {m.summary}"
+        for m in members
     )
 
-    # Axis line
-    parts.append(
-        f'<line x1="{margin_left}" y1="{axis_y}" x2="{margin_left + chart_w}" y2="{axis_y}" '
-        f'stroke="currentColor" stroke-opacity="0.4" stroke-width="1.5"/>'
-    )
 
-    # Axis ticks — pick ~8 evenly spaced timestamps
-    n_ticks = 8
-    for i in range(n_ticks + 1):
-        t = t_start + timedelta(seconds=span_sec * i / n_ticks)
-        x = x_for(t)
-        parts.append(
-            f'<line x1="{x:.1f}" y1="{axis_y - 5}" x2="{x:.1f}" y2="{axis_y + 5}" '
-            f'stroke="currentColor" stroke-opacity="0.5"/>'
-        )
-        label = _fmt_tick(t, span_sec)
-        parts.append(
-            f'<text x="{x:.1f}" y="{axis_y + 20}" text-anchor="middle" '
-            f'fill="currentColor" fill-opacity="0.7">{escape(label)}</text>'
-        )
-
-    # ---- Clustering --------------------------------------------------
-    # Project every in-window event to an (x, event) pair, then walk
-    # the sorted list grouping anything whose x is within cluster_px
-    # of the current cluster's centroid. This is layout-aware: two
-    # events 200 ms apart on a 30-day-wide chart collapse because they
-    # project to the same pixel column, not because their timestamps
-    # are equal.
-    min_gap = 10.0
-    base_radius = 4.5
-    max_radius = 12.0
+def _cluster_members(
+    lane_events: list[Event],
+    x_for,
+    t_start: datetime,
+    t_end: datetime,
+    cluster_px: float,
+) -> list[dict]:
+    """Project every event to its pixel column and group adjacent
+    events whose columns are within ``cluster_px`` into a single
+    cluster dict. Returns ``[{"x": cx, "members": [Event, ...]}]``.
+    """
 
     projected: list[tuple[float, Event]] = []
-    for e in evs:
+    for e in lane_events:
         t = _parse_ts(e.ts)
         if t < t_start or t > t_end:
             continue
         projected.append((x_for(t), e))
+    projected.sort(key=lambda pair: pair[0])
 
     clusters: list[dict] = []
     for x, e in projected:
@@ -174,170 +184,190 @@ def render_event_timeline(
                 "x_last": x,
                 "members": [e],
             })
+    return clusters
 
-    # ---- Stacking ----------------------------------------------------
-    # Clusters still de-overlap vertically against each other with the
-    # alternating-bands logic the singleton renderer used. Only the
-    # unit of layout changed (cluster instead of event).
-    placed: list[tuple[float, float]] = []
 
-    for c in clusters:
-        x = c["x"]
-        members = c["members"]
-        count = len(members)
+def render_event_timeline(
+    events: list[Event],
+    from_ts: str | None = None,
+    to_ts: str | None = None,
+    *,
+    cluster_px: float = 6.0,
+) -> str:
+    """Return an inline SVG fragment for the event timeline.
 
-        y = axis_y
-        offset = 0
-        step = 12
-        while True:
-            candidate = axis_y + (offset // 2 + 1) * step * (-1 if offset % 2 == 0 else 1)
-            if offset == 0:
-                candidate = axis_y - step  # first stack always above
-            if not any(abs(px - x) < min_gap and abs(py - candidate) < step - 1 for px, py in placed):
-                y = candidate
-                break
-            offset += 1
-            if offset > 40:  # pathological cluster — stop stacking
-                y = candidate
-                break
+    One horizontal swim lane per event source actually present in
+    ``events``. Lanes are drawn in the canonical order defined by
+    :data:`SOURCE_ORDER`; empty sources are omitted.
+    """
 
-        placed.append((x, y))
+    if not events:
+        return _empty("No events in the reported window.")
 
-        # Radius scales with sqrt(count) so a 4-member cluster is
-        # twice the area of a singleton, a 9-member one three times,
-        # etc. Capped at max_radius so a 40-event burst doesn't eat
-        # half the chart.
-        radius = min(base_radius * math.sqrt(count), max_radius)
+    evs = sorted(events, key=lambda e: e.ts)
+    t_start = _parse_ts(from_ts) if from_ts else _parse_ts(evs[0].ts)
+    t_end = _parse_ts(to_ts) if to_ts else _parse_ts(evs[-1].ts)
+    if t_end <= t_start:
+        t_end = t_start + timedelta(minutes=1)
+    span_sec = (t_end - t_start).total_seconds()
 
-        # Colour: uniform-source cluster reuses the source's variable,
-        # mixed-source clusters get the neutral --muted fill.
-        sources = {m.source for m in members}
-        if len(sources) == 1:
-            colour = SOURCE_COLOR_VAR.get(next(iter(sources)), "var(--muted)")
-        else:
-            colour = "var(--muted)"
-
-        # Tooltip: one line per member, "<HH:MM:SS> [src] type: summary".
-        # For singleton clusters we keep the legacy "<ts> [src] type\n<summary>"
-        # shape so the existing round-trip test keeps matching.
-        if count == 1:
-            m = members[0]
-            tip = f"{m.ts} [{m.source}] {m.event_type}\n{m.summary}"
-        else:
-            tip = "\n".join(
-                f"{_hhmmss(m.ts)} [{m.source}] {m.event_type}: {m.summary}"
-                for m in members
-            )
-
-        # Stem line from axis to circle
-        parts.append(
-            f'<line x1="{x:.1f}" y1="{axis_y}" x2="{x:.1f}" y2="{y:.1f}" '
-            f'stroke="{colour}" stroke-opacity="0.6" stroke-width="1"/>'
-        )
-        parts.append(
-            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{radius:.2f}" '
-            f'fill="{colour}" stroke="currentColor" stroke-opacity="0.3" stroke-width="0.6">'
-            f'<title>{escape(tip)}</title></circle>'
-        )
-
-        if count > 1:
-            # Count badge centred in the circle. currentColor with
-            # reduced opacity reads on any palette (dark theme + the
-            # light report stylesheet), no hard-coded colour needed.
-            # dy of 0.33em approximates optical centring.
-            parts.append(
-                f'<text x="{x:.1f}" y="{y:.1f}" dy="0.33em" '
-                f'text-anchor="middle" font-size="9" font-weight="600" '
-                f'fill="currentColor" fill-opacity="0.85" '
-                f'pointer-events="none">{count}</text>'
-            )
-        elif members[0].event_type in LABEL_WORTHY_TYPES:
-            # Singletons get the same inline label they always did —
-            # this branch is the "zero visual regression for sparse
-            # streams" guarantee.
-            label = _short_label(members[0])
-            above = y < axis_y
-            label_y = y - 8 if above else y + 16
-            parts.append(
-                f'<text x="{x:.1f}" y="{label_y:.1f}" text-anchor="middle" '
-                f'fill="currentColor" fill-opacity="0.85" font-size="9.5">'
-                f'{escape(label)}</text>'
-            )
-
-    # Legend — only show sources that actually appear in this slice
-    # of events so the split DNS / File timelines don't carry
-    # irrelevant legend entries.
-    present_sources = {e.source for e in evs}
-    legend_y = height - 20
-    lx = margin_left
-    for src, colour in SOURCE_COLOR_VAR.items():
-        if src not in present_sources:
+    # Group events by source, filtered to the window.
+    by_source: dict[str, list[Event]] = defaultdict(list)
+    for e in evs:
+        t = _parse_ts(e.ts)
+        if t < t_start or t > t_end:
             continue
+        by_source[e.source].append(e)
+    # Lanes to draw: those in the canonical order that actually
+    # have events. Anything unrecognised in the source field goes
+    # at the end under a generic lane so we never silently drop
+    # data.
+    active_lanes: list[str] = [s for s in SOURCE_ORDER if by_source.get(s)]
+    leftover = sorted(s for s in by_source if s not in SOURCE_ORDER)
+    active_lanes.extend(leftover)
+
+    if not active_lanes:
+        return _empty("No events in the reported window.")
+
+    # Layout.
+    width = 920
+    margin_left = 80     # lane-label column
+    margin_right = 20
+    margin_top = 40      # title strip
+    margin_bot = 44      # axis + tick labels + padding
+    lane_h = 32
+    chart_w = width - margin_left - margin_right
+    total_height = margin_top + len(active_lanes) * lane_h + margin_bot
+
+    def x_for(t: datetime) -> float:
+        return margin_left + (
+            (t - t_start).total_seconds() / span_sec
+        ) * chart_w
+
+    parts: list[str] = []
+    parts.append(
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'viewBox="0 0 {width} {total_height}" '
+        f'font-family="sans-serif" font-size="11" class="event-timeline">'
+    )
+
+    # Title strip: time-range label at the top-right, out of the way
+    # of the lane labels on the left.
+    parts.append(
+        f'<text class="evt-title" x="{margin_left}" y="22" '
+        f'font-weight="600" fill="currentColor">'
+        f'{escape(t_start.strftime("%Y-%m-%d %H:%M"))} &#x2192; '
+        f'{escape(t_end.strftime("%Y-%m-%d %H:%M"))} UTC</text>'
+    )
+
+    # Lane chrome: label on the left, faint top gridline per lane.
+    for i, source in enumerate(active_lanes):
+        lane_top = margin_top + i * lane_h
+        lane_mid = lane_top + lane_h / 2
+        # Lane label.
         parts.append(
-            f'<circle cx="{lx + 4}" cy="{legend_y - 3}" r="4" fill="{colour}"/>'
+            f'<text class="evt-lane-label" '
+            f'x="{margin_left - 8}" y="{lane_mid:.1f}" '
+            f'text-anchor="end" dominant-baseline="middle" '
+            f'fill="currentColor" fill-opacity="0.7">'
+            f'{escape(source)}</text>'
         )
+        # Faint horizontal rule between lanes.
         parts.append(
-            f'<text x="{lx + 12}" y="{legend_y}" fill="currentColor" fill-opacity="0.75">'
-            f'{escape(src)}</text>'
+            f'<line class="evt-lane-line" '
+            f'x1="{margin_left}" y1="{lane_top:.1f}" '
+            f'x2="{margin_left + chart_w}" y2="{lane_top:.1f}" '
+            f'stroke="currentColor" stroke-opacity="0.08" stroke-width="1"/>'
         )
-        lx += 95
+    # Bottom border of the last lane (also where the axis sits).
+    axis_y = margin_top + len(active_lanes) * lane_h
+    parts.append(
+        f'<line class="evt-lane-line" '
+        f'x1="{margin_left}" y1="{axis_y:.1f}" '
+        f'x2="{margin_left + chart_w}" y2="{axis_y:.1f}" '
+        f'stroke="currentColor" stroke-opacity="0.3" stroke-width="1"/>'
+    )
+
+    # X-axis ticks + labels along the bottom.
+    n_ticks = 8
+    for i in range(n_ticks + 1):
+        t = t_start + timedelta(seconds=span_sec * i / n_ticks)
+        x = x_for(t)
+        parts.append(
+            f'<line x1="{x:.1f}" y1="{axis_y:.1f}" '
+            f'x2="{x:.1f}" y2="{axis_y + 4:.1f}" '
+            f'stroke="currentColor" stroke-opacity="0.5"/>'
+        )
+        label = _fmt_tick(t, span_sec)
+        parts.append(
+            f'<text x="{x:.1f}" y="{axis_y + 18:.1f}" text-anchor="middle" '
+            f'fill="currentColor" fill-opacity="0.7">{escape(label)}</text>'
+        )
+
+    # Dot sizing.
+    base_radius = 5.0
+    max_radius = 11.0
+
+    # Render each lane's clusters.
+    for i, source in enumerate(active_lanes):
+        lane_top = margin_top + i * lane_h
+        lane_mid = lane_top + lane_h / 2
+        colour = SOURCE_COLOR_VAR.get(source, "var(--muted)")
+
+        clusters = _cluster_members(
+            by_source[source], x_for, t_start, t_end, cluster_px,
+        )
+        for c in clusters:
+            x = c["x"]
+            members = c["members"]
+            count = len(members)
+            radius = min(base_radius * math.sqrt(count), max_radius)
+
+            has_milestone = any(
+                m.event_type in MILESTONE_TYPES for m in members
+            )
+
+            tip_html = _build_data_tip(members)
+            tip_fallback = _build_title_fallback(members)
+
+            parts.append(
+                f'<g class="evt-cluster" data-source="{escape(source)}" '
+                f'data-tip="{escape(tip_html, quote=True)}">'
+            )
+            # Milestone flag: a short vertical tick above the dot
+            # into the lane's upper half, plus a tiny filled
+            # triangle tip. Drawn before the circle so the circle
+            # sits on top of the flag at the dot position.
+            if has_milestone:
+                flag_top = lane_top + 2
+                parts.append(
+                    f'<line class="evt-milestone-flag" '
+                    f'x1="{x:.1f}" y1="{flag_top:.1f}" '
+                    f'x2="{x:.1f}" y2="{lane_mid:.1f}" '
+                    f'stroke="{colour}" stroke-width="1.2" '
+                    f'stroke-opacity="0.85"/>'
+                )
+                parts.append(
+                    f'<circle class="evt-milestone-cap" '
+                    f'cx="{x:.1f}" cy="{flag_top:.1f}" r="2" '
+                    f'fill="{colour}" fill-opacity="0.9"/>'
+                )
+            parts.append(
+                f'<circle cx="{x:.1f}" cy="{lane_mid:.1f}" r="{radius:.2f}" '
+                f'fill="{colour}" fill-opacity="0.88" '
+                f'stroke="currentColor" stroke-opacity="0.35" stroke-width="0.6"/>'
+            )
+            if count > 1:
+                parts.append(
+                    f'<text class="evt-count-badge" '
+                    f'x="{x:.1f}" y="{lane_mid:.1f}" dy="0.33em" '
+                    f'text-anchor="middle" font-size="9" font-weight="600" '
+                    f'fill="currentColor" fill-opacity="0.92" '
+                    f'pointer-events="none">{count}</text>'
+                )
+            # <title> fallback for PDF and no-JS browsers.
+            parts.append(f'<title>{escape(tip_fallback)}</title>')
+            parts.append('</g>')
 
     parts.append("</svg>")
     return "".join(parts)
-
-
-def _hhmmss(ts: str) -> str:
-    """Extract ``HH:MM:SS`` from an ISO timestamp for cluster tooltips.
-
-    Falls back to the raw string if the shape is unexpected, so a
-    badly-formed ``ts`` never crashes the renderer.
-    """
-
-    try:
-        t = _parse_ts(ts)
-        return t.strftime("%H:%M:%S")
-    except Exception:  # noqa: BLE001
-        return ts
-
-
-def _fmt_tick(t: datetime, span_sec: float) -> str:
-    # Pick granularity based on the window width.
-    if span_sec <= 2 * 3600:
-        return t.strftime("%H:%M")
-    if span_sec <= 2 * 86400:
-        return t.strftime("%m-%d %H:%M")
-    if span_sec <= 60 * 86400:
-        return t.strftime("%Y-%m-%d")
-    return t.strftime("%Y-%m")
-
-
-def _short_label(e: Event) -> str:
-    """Compress an event summary to fit inline on the timeline."""
-    bits: list[str] = []
-    if e.key_role and e.key_tag:
-        bits.append(f"{e.key_role}{e.key_tag}")
-    field = e.detail.get("field") if e.detail else None
-    new = e.detail.get("new") if e.detail else None
-    if field and new:
-        bits.append(f"{field}={new}")
-    elif e.event_type.startswith("iodyn_"):
-        bits.append(e.event_type[len("iodyn_"):])
-    elif e.event_type.startswith("named_"):
-        bits.append(e.event_type[len("named_"):])
-    elif e.event_type.startswith("dns_"):
-        bits.append(e.event_type[len("dns_"):])
-    else:
-        bits.append(e.event_type)
-    label = " ".join(bits)
-    if len(label) > 30:
-        label = label[:27] + "..."
-    return label
-
-
-def _empty(message: str) -> str:
-    return (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 60" '
-        'font-family="sans-serif" font-size="12">'
-        f'<text x="10" y="30" fill="currentColor" fill-opacity="0.6">{escape(message)}</text>'
-        "</svg>"
-    )
