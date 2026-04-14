@@ -95,14 +95,11 @@ def render_event_timeline(
         t_end = t_start + timedelta(minutes=1)
     span_sec = (t_end - t_start).total_seconds()
 
-    # Layout. Extra vertical padding top + bottom compared with the
-    # old layout so the angled inline labels have room to fan out
-    # above/below the axis without clipping at the SVG edge or
-    # running into the legend strip along the bottom.
+    # Layout
     margin_left = 60
     margin_right = 40
-    margin_top = 50
-    margin_bot = 100
+    margin_top = 40
+    margin_bot = 70
     width = 920
     axis_y = 180
     chart_w = width - margin_left - margin_right
@@ -232,13 +229,7 @@ def render_event_timeline(
                 for m in members
             )
 
-        # Wrap cluster + its hover-tip in one <g> so the CSS hover
-        # selector (.evt-cluster:hover .evt-tip) can fire from
-        # anywhere on the group. The <title> stays for WeasyPrint
-        # PDF rendering (WeasyPrint ignores the :hover tip but
-        # still emits the browser/OS-native tooltip from <title>).
-        above = y < axis_y
-        parts.append(f'<g class="evt-cluster">')
+        # Stem line from axis to circle
         parts.append(
             f'<line x1="{x:.1f}" y1="{axis_y}" x2="{x:.1f}" y2="{y:.1f}" '
             f'stroke="{colour}" stroke-opacity="0.6" stroke-width="1"/>'
@@ -261,44 +252,17 @@ def render_event_timeline(
                 f'pointer-events="none">{count}</text>'
             )
         elif members[0].event_type in LABEL_WORTHY_TYPES:
-            # Inline label for singletons, angled so adjacent
-            # milestones don't horizontally overwrite each other.
-            # Above-axis dots: label above, rotated -30° CCW so it
-            # fans up-right. Below-axis dots: label below, rotated
-            # +30° CW so it fans down-right. Either way the label
-            # reads away from the axis.
+            # Singletons get the same inline label they always did —
+            # this branch is the "zero visual regression for sparse
+            # streams" guarantee.
             label = _short_label(members[0])
-            # Start the label one dot-radius away so it doesn't
-            # overlap the circle fill.
-            label_offset = radius + 3
-            if above:
-                label_x = x + 2
-                label_y = y - label_offset
-                angle = -30
-            else:
-                label_x = x + 2
-                label_y = y + label_offset + 6
-                angle = 30
+            above = y < axis_y
+            label_y = y - 8 if above else y + 16
             parts.append(
-                f'<text class="evt-label" '
-                f'x="{label_x:.1f}" y="{label_y:.1f}" '
-                f'transform="rotate({angle} {label_x:.1f} {label_y:.1f})" '
-                f'text-anchor="start" '
-                f'fill="currentColor" fill-opacity="0.85" font-size="10">'
+                f'<text x="{x:.1f}" y="{label_y:.1f}" text-anchor="middle" '
+                f'fill="currentColor" fill-opacity="0.85" font-size="9.5">'
                 f'{escape(label)}</text>'
             )
-
-        # Themed hover tooltip — CSS-only, opacity toggled by the
-        # parent <g class="evt-cluster">:hover selector. Rendered
-        # as SVG so it respects the dark-theme variables; sized at
-        # 12 px so it's actually readable (the <title> fallback
-        # renders at OS tooltip size which is tiny). WeasyPrint
-        # doesn't apply :hover so the tip stays invisible in the
-        # PDF, where the <title> on the circle still works.
-        parts.extend(
-            _render_hover_tip(tip, x, y, radius, width, height, above)
-        )
-        parts.append('</g>')
 
     # Legend — only show sources that actually appear in this slice
     # of events so the split DNS / File timelines don't carry
@@ -365,85 +329,9 @@ def _short_label(e: Event) -> str:
     else:
         bits.append(e.event_type)
     label = " ".join(bits)
-    # Cap label length. Angled labels project vertically by
-    # roughly ``len * 7 * sin(30°)`` pixels; at 22 chars that's
-    # ~77 px, which comfortably fits in the top/bottom chart
-    # margins after the recent layout bump.
-    if len(label) > 22:
-        label = label[:19] + "..."
+    if len(label) > 30:
+        label = label[:27] + "..."
     return label
-
-
-def _render_hover_tip(
-    tip_text: str,
-    dot_x: float,
-    dot_y: float,
-    dot_radius: float,
-    chart_width: float,
-    chart_height: float,
-    dot_above_axis: bool,
-) -> list[str]:
-    """Emit SVG for a themed CSS-only hover tooltip.
-
-    Returns a list of SVG element strings to splice into the
-    cluster's <g>. The tip is hidden by default and becomes
-    visible when the parent <g class="evt-cluster"> is hovered
-    (CSS in app.css). Sized at 12 px for readability — the OS-
-    rendered <title> tooltip on the circle stays as the
-    PDF-export fallback.
-    """
-
-    lines = tip_text.split("\n")
-    # Clip to 10 lines; cluster titles can blow up on mass
-    # transitions. The <title> element still carries the full
-    # text for the fallback OS tooltip.
-    if len(lines) > 10:
-        visible = lines[:10]
-        visible.append(f"... and {len(lines) - 10} more")
-    else:
-        visible = lines
-
-    # Rough text-width estimate at 12 px sans-serif — ~6.8 px per
-    # char. Pad the background for a comfortable reading margin.
-    pad_x = 10
-    pad_y = 8
-    line_h = 15
-    char_w = 6.8
-    max_line_len = max((len(s) for s in visible), default=0)
-    tip_w = min(chart_width - 20, max_line_len * char_w + pad_x * 2)
-    tip_h = line_h * len(visible) + pad_y * 2
-
-    # Position: default to upper-right of the dot. Flip if it'd
-    # run off the chart's right edge, and if the dot is near the
-    # top of the chart place the tip below instead of above.
-    gap = 10
-    tip_x = dot_x + dot_radius + gap
-    if tip_x + tip_w > chart_width - 5:
-        tip_x = dot_x - dot_radius - gap - tip_w
-    tip_y = dot_y - tip_h - gap
-    if tip_y < 5:
-        tip_y = dot_y + dot_radius + gap
-    # Clamp vertical so it never runs off the chart.
-    if tip_y + tip_h > chart_height - 5:
-        tip_y = max(5, chart_height - tip_h - 5)
-
-    out: list[str] = []
-    out.append(
-        f'<g class="evt-tip" pointer-events="none" '
-        f'transform="translate({tip_x:.1f}, {tip_y:.1f})">'
-    )
-    out.append(
-        f'<rect class="evt-tip-bg" x="0" y="0" '
-        f'width="{tip_w:.1f}" height="{tip_h:.1f}" rx="4" ry="4"/>'
-    )
-    for i, line in enumerate(visible):
-        y = pad_y + (i + 1) * line_h - 4  # baseline offset
-        out.append(
-            f'<text class="evt-tip-line" x="{pad_x}" y="{y:.1f}">'
-            f'{escape(line)}</text>'
-        )
-    out.append('</g>')
-    return out
 
 
 def _empty(message: str) -> str:

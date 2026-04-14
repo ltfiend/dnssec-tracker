@@ -495,40 +495,6 @@ table th { background: var(--surface-alt); font-weight: 600; }
   padding: 0.3rem;
 }
 
-/* Angled event labels — the transform is set inline on the <text>
- * node; this rule just tunes the baseline typography. The dominant
- * baseline is set so the rotation pivot aligns with the glyph
- * baseline rather than its centre. */
-.event-timeline .evt-label {
-  dominant-baseline: alphabetic;
-}
-
-/* Themed hover tooltip for each event cluster. Hidden by default;
- * the parent <g class="evt-cluster">:hover toggles it on. The
- * native <title> tooltip on the circle is preserved as the PDF /
- * fallback path — this CSS overlay only augments the live UI. */
-.event-timeline .evt-tip { opacity: 0; transition: opacity 0.12s ease; }
-.event-timeline .evt-cluster:hover .evt-tip { opacity: 1; }
-.event-timeline .evt-tip-bg {
-  fill: var(--surface);
-  stroke: var(--accent);
-  stroke-width: 1;
-  /* Subtle shadow via a drop-shadow filter so the tip stands off
-   * the chart chrome. Rendered in both dark and light themes by
-   * using currentColor for the shadow tint. */
-  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
-}
-.event-timeline .evt-tip-line {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  font-size: 12px;
-  fill: var(--fg);
-}
-/* The <title> element is preserved inside each cluster for
- * WeasyPrint PDF export and for browsers that aren't firing :hover
- * (e.g. touch devices tapping outside the dot). Keep it as the
- * fallback — nothing to style here, browsers render <title> as an
- * OS tooltip. */
-
 /* ---- Rollover view ------------------------------------------------ */
 .rollover-view {
   color: var(--fg);

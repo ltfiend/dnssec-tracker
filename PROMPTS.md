@@ -259,9 +259,3 @@ Remind me, do we have a method that removes all entries for keys once the file n
 
 ---
 
-## 2026-04-14 11:36:15
-
-Ok, let's do a deep dive on the event timelines.   Currently they are pretty unreadable, all the text is horizontal on the same line so it overwrites itself.  Can we put the text on angles to the timeline so they don't overlap?  The text in the hover box is extremely small and hard to read.
-
----
-
