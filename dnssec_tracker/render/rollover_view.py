@@ -801,9 +801,45 @@ def render_rollover_view(
                 overdue_state = overdue_by_tag.get(k.key_tag)
 
             segs = per_key_segments[(k.zone, k.key_tag, k.role)]
+
+            # Minimum visible width for a phase segment. On a wide
+            # chart (a year or more), a pre-publication phase of a
+            # few days projects to only 1-2 pixels and disappears
+            # visually next to the months-long active bar — the user
+            # reported seeing "one color bar for the whole
+            # timeframe". Enforcing a small floor (6 px) and
+            # shifting subsequent segments forward keeps every
+            # transition visible without distorting the longest
+            # phases meaningfully. The final segment is capped at
+            # the chart's right edge so the overall timeline still
+            # respects ``window_end``.
+            min_phase_w = 6.0
+            chart_right = margin_left + chart_w
+            laid_out: list[tuple[float, float, str]] = []
+            prev_x1: float | None = None
             for t0, t1, name in segs:
-                x0 = x_for(t0)
-                x1 = x_for(t1)
+                x0_raw = x_for(t0)
+                x1_raw = x_for(t1)
+                x0 = x0_raw if prev_x1 is None else max(x0_raw, prev_x1)
+                # Only pad positive-duration segments — zero-duration
+                # phases stay zero so the time-axis maths upstream
+                # still decide what's real.
+                if x1_raw > x0_raw:
+                    x1 = max(x1_raw, x0 + min_phase_w)
+                else:
+                    x1 = x1_raw
+                # Clamp to the chart right edge; squeezing mostly
+                # comes out of the longest (usually active) segment.
+                x1 = min(x1, chart_right)
+                x0 = min(x0, x1)
+                laid_out.append((x0, x1, name))
+                prev_x1 = x1
+
+            # Iterate both the original (t0, t1) timestamps and the
+            # laid-out (x0, x1) pixel bounds in lockstep — the rect
+            # uses the visible-width-enforced pixels, the tooltip
+            # text uses the true timestamps.
+            for (t0, t1, name), (x0, x1, _n) in zip(segs, laid_out):
                 w = max(1.0, x1 - x0)
 
                 is_lingering = (

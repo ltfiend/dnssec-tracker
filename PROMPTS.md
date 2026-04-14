@@ -235,3 +235,9 @@ misclicked, continue
 
 ---
 
+## 2026-04-14 07:42:34
+
+Should that render previously tracked changes properly?  I'm still seeing only one color bar other than the DS one and it takes up the whole timeframe.  See for example:   https://dnssec-tracker.devries.tv/zones/fusedcoating.com
+
+---
+

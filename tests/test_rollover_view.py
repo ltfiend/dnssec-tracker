@@ -746,3 +746,97 @@ def test_collapsed_with_no_events_still_degrades_gracefully():
     # Matches the pre-fix behaviour — with zero event evidence there's
     # simply nothing to split on.
     assert phases == ["active"]
+
+
+# --------------------------------------------------------------------------
+# Minimum visible bar width — user-reported followup:
+# "I'm still seeing only one color bar other than the DS one and it
+# takes up the whole timeframe."
+#
+# On a year-wide chart a 2-day pre-publication phase projects to ~3
+# pixels — technically drawn but visually invisible next to the
+# months-long active band. Enforce a 6-px floor for every positive-
+# duration segment so every phase transition stays legible.
+# --------------------------------------------------------------------------
+
+import re as _re
+
+
+def test_short_phases_get_minimum_visible_width_on_long_chart():
+    """A realistic long-lived KSK: pre-pub 2 days, published 7 days,
+    active >1 year. On the default ~680-px chart, pre-pub projects
+    to ~3 pixels raw. The renderer must pad it up to at least 6 px
+    so the user can actually see the bar."""
+    k = _ksk(12345)
+    snapshots = {
+        "example.com#12345#KSK": {"fields": {
+            "Generated": "20250101000000",
+            "Published": "20250103000000",
+            "Active":    "20250110000000",
+            "Retired": "0", "Removed": "0",
+            "GoalState": "omnipresent",
+        }},
+    }
+    svg = render_rollover_view(
+        [], [k], snapshots,
+        from_ts="2025-01-01T00:00:00Z",
+        to_ts="2026-04-14T00:00:00Z",
+        today=datetime(2026, 4, 14, tzinfo=timezone.utc),
+    )
+    widths = {
+        m.group(1): float(m.group(2))
+        for m in _re.finditer(
+            r'<rect class="phase phase-([\w-]+)"[^>]*?\bwidth="([\d.]+)"',
+            svg,
+        )
+    }
+    assert "pre-publication" in widths
+    assert "published" in widths
+    assert "active" in widths
+    # Every positive-duration phase must be visually detectable.
+    assert widths["pre-publication"] >= 6.0, (
+        f"pre-publication bar only {widths['pre-publication']}px — "
+        f"this is the 'can't see the phase change' regression"
+    )
+    assert widths["published"] >= 6.0
+    # Active still dominates but the earlier phases stole a few
+    # pixels. Confirm it's still clearly the biggest.
+    assert widths["active"] > 10 * widths["pre-publication"]
+
+
+def test_minimum_width_does_not_push_bars_past_chart_right_edge():
+    """If every narrow segment got padded and then pushed later
+    segments forward, the final one could fall off the right edge.
+    The renderer must cap the last bar so the overall chart still
+    respects the window bound."""
+    k = _ksk(77777)
+    snapshots = {
+        "example.com#77777#KSK": {"fields": {
+            "Generated": "20260401000000",
+            "Published": "20260402000000",
+            "Active":    "20260403000000",
+            "Retired":   "20260404000000",
+            "Removed":   "20260405000000",
+            "GoalState": "omnipresent",
+        }},
+    }
+    # Narrow window so every phase collides with the min-width floor.
+    svg = render_rollover_view(
+        [], [k], snapshots,
+        from_ts="2026-04-01T00:00:00Z",
+        to_ts="2026-04-06T00:00:00Z",
+        today=datetime(2026, 4, 6, tzinfo=timezone.utc),
+    )
+    # Chart width is 900 - margin_left(200) - margin_right(20) = 680,
+    # right edge is at x=880. Every phase rect must end <= 880.
+    for m in _re.finditer(
+        r'<rect class="phase phase-[\w-]+"[^>]*?\bx="([\d.]+)"'
+        r'[^>]*?\bwidth="([\d.]+)"',
+        svg,
+    ):
+        x = float(m.group(1))
+        w = float(m.group(2))
+        assert x + w <= 881.0, (
+            f"phase rect runs off the right edge: x={x} w={w} → "
+            f"right={x + w}"
+        )
