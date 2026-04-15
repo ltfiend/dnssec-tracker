@@ -72,14 +72,14 @@ def test_many_events_at_same_ts_in_same_lane_collapse_into_one_circle():
     circles = _circles(svg)
     assert len(circles) == 1
 
-    # <title> fallback lists every member.
-    title_match = re.search(r"<title>(.*?)</title>", svg, re.DOTALL)
-    assert title_match is not None
-    title_text = title_match.group(1)
-    assert "GoalState" in title_text
-    assert "DNSKEYState" in title_text
-    assert "KRRSIGState" in title_text
-    assert "DSState" in title_text
+    # The cluster's data-tip carries every member.
+    tip_match = re.search(r'data-tip="([^"]+)"', svg)
+    assert tip_match is not None
+    tip = tip_match.group(1)
+    assert "GoalState" in tip
+    assert "DNSKEYState" in tip
+    assert "KRRSIGState" in tip
+    assert "DSState" in tip
 
 
 def test_events_spread_wide_do_not_cluster():
@@ -209,16 +209,15 @@ def test_singleton_has_no_inline_text_label():
             detail={"field": "GoalState", "new": "omnipresent"},
         )
     ])
-    # No free-standing text label carrying the detail — <title>
-    # and data-tip both have it, but no floating <text>.
+    # No free-standing text label carrying the detail — the
+    # data-tip attribute has it, but no floating <text>.
     # Scan every non-chrome <text>: title strip, lane label, tick
     # labels, count badges. None should contain the summary.
     free_text_nodes = re.findall(r'<text[^>]*>([^<]+)</text>', svg)
     for t in free_text_nodes:
         assert "KSK GoalState" not in t
         assert "GoalState -> omnipresent" not in t
-    # The detail still exists in the tooltip paths.
-    assert svg.count('<title>') == 1
+    # The detail lives in the data-tip attribute.
     assert 'data-tip="' in svg
 
 

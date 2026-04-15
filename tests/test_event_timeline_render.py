@@ -4,8 +4,7 @@ The timeline's structure: one horizontal swim lane per source
 present in the event list, ordered canonically
 (state / key / rndc / dns / syslog / named). Each lane carries
 its own dots; per-event inline labels are gone — detail lives in
-the hover tooltip (``data-tip`` attribute) and the ``<title>``
-fallback child.
+the hover tooltip (``data-tip`` attribute on each cluster).
 """
 
 from dnssec_tracker.models import Event
@@ -52,20 +51,13 @@ def test_timeline_has_one_lane_per_source():
     assert labels == ["state", "rndc", "dns", "syslog"]
 
 
-def test_timeline_includes_event_circles_and_title_tooltips():
+def test_timeline_includes_event_circles_and_data_tip_tooltips():
     svg = render_event_timeline(_events())
-    # One <circle> per event (dns + syslog land in the same
-    # millisecond bucket, so clustering merges them in the DNS
-    # lane? No — dns and syslog are in different lanes). Each
-    # lane gets its own cluster:
-    #   state lane: 1 event
-    #   rndc lane:  1 event
-    #   dns lane:   1 event
-    #   syslog lane:1 event
+    # One cluster per source (each source lands in its own lane).
     # Plus potential milestone-flag cap circles for the
     # milestone types — we only require at least 4 event circles.
     assert svg.count("<circle") >= 4
-    # <title> fallback per cluster carries the event detail.
+    # data-tip attribute on each cluster carries the event detail.
     assert "GoalState" in svg
     assert "rndc_state_changed" in svg
     assert "DS added at parent" in svg
@@ -77,8 +69,8 @@ def test_no_inline_text_labels_for_singletons():
     lane label on the left identifies the category."""
     svg = render_event_timeline(_events())
     # The event summary text must NOT appear as standalone SVG
-    # text (it only appears inside <title> or the data-tip
-    # attribute, not as a floating <text> label on the chart).
+    # text (it only appears inside the data-tip attribute, not
+    # as a floating <text> label on the chart).
     import re
     free_text = re.findall(
         r'<text[^>]*>([^<]+)</text>', svg,

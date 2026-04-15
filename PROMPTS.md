@@ -277,3 +277,21 @@ do it
 
 ---
 
+## 2026-04-15 10:30:10
+
+Let's drop a tag here and maybe branch a troubleshooting branch.   We've got two problems.  The rollover view looks great on the demo page but I'm not sure it's actually updating the rollover view on the zones page.   ltfiend.com should be shoing a key deleted but it doesn'y.   Similarrly the timeslines look pretty good on the real pages but on the Demo page it's still the old formatting.  See if you can figure out what is going on
+
+---
+
+## 2026-04-15 18:16:52
+
+Let's table that planning,  I need to think about it.  Clear context and let's do some bug fixes
+
+---
+
+## 2026-04-15 18:19:34
+
+Event timelines have two different hover boxes.  One a formatted window that comes up first with larger fonts then one that appears on top or to the side of the other with very small text.  I would like to retain only the first hover box.
+
+---
+

@@ -1,15 +1,10 @@
 """Hover-tooltip plumbing for the swim-lane event timeline.
 
-Each cluster <g> carries both an SVG ``<title>`` child (fallback
-for the PDF export and for browsers without the page-level JS
-hook) and a ``data-tip`` attribute with pre-escaped HTML that the
-JavaScript tooltip snippet in ``layout.html`` injects into a
-floating <div> near the cursor on hover.
-
-Tests here pin both payloads — the HTML content in ``data-tip``
-must be properly escaped (since it's injected via innerHTML), and
-the ``<title>`` fallback must carry the same essential
-information in plain text.
+Each cluster <g> carries a ``data-tip`` attribute with pre-escaped
+HTML that the JavaScript tooltip snippet in ``layout.html`` injects
+into a floating <div> near the cursor on hover. We deliberately do
+*not* emit an SVG ``<title>`` child: browsers render that as a
+second, small native tooltip on top of the styled one.
 """
 
 import re
@@ -83,11 +78,11 @@ def test_multiple_event_tip_separates_members_with_hr():
     assert m.group(1).count("&lt;hr&gt;") == 2
 
 
-def test_title_fallback_has_every_cluster_members_plain_text():
-    """The <title> element — used by WeasyPrint PDF export and as
-    the OS-native browser tooltip when the JS snippet hasn't run
-    — carries a plain-text fallback with one line per cluster
-    member."""
+def test_no_svg_title_child_is_emitted():
+    """The SVG ``<title>`` child is deliberately not rendered. Browsers
+    show it as a second, small native tooltip on top of the styled
+    floating one — having two tooltips overlap was the bug this
+    change fixes."""
     ts = "2026-04-10T12:00:00Z"
     svg = render_event_timeline(
         [
@@ -98,30 +93,21 @@ def test_title_fallback_has_every_cluster_members_plain_text():
         from_ts="2026-04-10T00:00:00Z",
         to_ts="2026-04-10T23:59:59Z",
     )
-    # Single cluster, single <title>; three summary strings land
-    # in it on separate lines.
-    titles = re.findall(r"<title>(.*?)</title>", svg, re.DOTALL)
-    assert len(titles) == 1
-    t = titles[0]
-    assert "alpha" in t
-    assert "bravo" in t
-    assert "charlie" in t
+    assert "<title>" not in svg
+    assert "</title>" not in svg
 
 
-def test_data_tip_and_title_both_present_on_every_cluster():
-    """Defense-in-depth: both the JS-tooltip ``data-tip`` attribute
-    and the native ``<title>`` fallback must be emitted on every
-    cluster. Losing either breaks one of the two tooltip paths."""
+def test_data_tip_present_on_every_cluster():
+    """Every cluster carries a ``data-tip`` attribute — the single
+    source of truth for hover content now that ``<title>`` is gone."""
     svg = render_event_timeline([
         _mk("2026-04-01T00:00:00Z", "state", "state_changed"),
         _mk("2026-04-10T00:00:00Z", "rndc", "rndc_state_changed"),
         _mk("2026-04-15T00:00:00Z", "dns", "dns_ds_appeared_at_parent"),
     ])
     clusters = re.findall(r'<g class="evt-cluster"[^>]*>', svg)
-    titles = re.findall(r"<title>", svg)
     data_tips = re.findall(r'data-tip="', svg)
     assert len(clusters) == 3
-    assert len(titles) == 3
     assert len(data_tips) == 3
 
 

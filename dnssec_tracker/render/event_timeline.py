@@ -11,11 +11,11 @@ state fields in the same rndc poll) stay legible.
 Per-event inline labels are gone: the lane's left-edge label
 already identifies the category, and per-event detail lives in a
 hover tooltip. Each cluster ``<g class="evt-cluster">`` carries
-both a ``<title>`` child (PDF / OS-native fallback, unchanged from
-before) and a ``data-tip`` attribute with pre-escaped HTML for the
-page-level JavaScript tooltip hook in ``layout.html``. WeasyPrint
-ignores the JS entirely and renders the ``<title>`` as a PDF
-tooltip, so the export path still works.
+a ``data-tip`` attribute with pre-escaped HTML that the page-level
+JavaScript tooltip hook in ``layout.html`` injects into a themed
+floating ``<div>``. We deliberately do *not* emit an SVG
+``<title>`` child: browsers render it as a second, small native
+tooltip that overlaps the styled one.
 
 Milestone events (key creation, DS transitions at the parent,
 operator-issued checkds commands, file deletion) gain a small
@@ -136,17 +136,6 @@ def _build_data_tip(members: list[Event]) -> str:
         if m.summary:
             lines.append(escape(m.summary))
     return "<br>".join(lines)
-
-
-def _build_title_fallback(members: list[Event]) -> str:
-    """Plain-text fallback for the <title> child — same content the
-    live tooltip shows, rendered as the browser's native (OS-sized)
-    tooltip when no JS is present. Also what WeasyPrint picks up
-    for the PDF export."""
-    return "\n".join(
-        f"{_hhmmss(m.ts)} [{m.source}] {m.event_type}: {m.summary}"
-        for m in members
-    )
 
 
 def _cluster_members(
@@ -328,7 +317,6 @@ def render_event_timeline(
             )
 
             tip_html = _build_data_tip(members)
-            tip_fallback = _build_title_fallback(members)
 
             parts.append(
                 f'<g class="evt-cluster" data-source="{escape(source)}" '
@@ -365,8 +353,6 @@ def render_event_timeline(
                     f'fill="currentColor" fill-opacity="0.92" '
                     f'pointer-events="none">{count}</text>'
                 )
-            # <title> fallback for PDF and no-JS browsers.
-            parts.append(f'<title>{escape(tip_fallback)}</title>')
             parts.append('</g>')
 
     parts.append("</svg>")
